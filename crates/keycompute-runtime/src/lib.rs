@@ -9,7 +9,7 @@ pub mod provider_health;
 pub mod store;
 
 pub use account_state::{AccountState, AccountStateStore};
-pub use cooldown::CooldownManager;
+pub use cooldown::{CooldownEntry, CooldownManager, CooldownReason};
 pub use provider_health::{ProviderHealth, ProviderHealthStore};
 pub use store::RuntimeStore;
 

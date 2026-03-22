@@ -3,7 +3,7 @@
 //! 路由引擎，双层路由，只读无副作用。
 //! 架构约束：只读 Pricing 和 Runtime 状态快照，不写任何状态。
 
-use keycompute_runtime::{AccountStateStore, ProviderHealthStore};
+use keycompute_runtime::{AccountStateStore, CooldownManager, ProviderHealthStore};
 use keycompute_types::{ExecutionPlan, ExecutionTarget, KeyComputeError, PricingSnapshot, RequestContext, Result};
 use std::sync::Arc;
 use uuid::Uuid;
@@ -44,12 +44,15 @@ impl Default for RoutingConfig {
 ///
 /// 双层路由：Layer1 模型路由，Layer2 账号路由
 /// 集成 ProviderHealthStore 进行健康评分路由
+/// 集成 CooldownManager 进行冷却状态检查
 #[derive(Debug, Clone)]
 pub struct RoutingEngine {
     /// 账号状态存储（只读）
     account_states: Arc<AccountStateStore>,
     /// Provider 健康状态存储（只读）
     provider_health: Arc<ProviderHealthStore>,
+    /// 冷却管理器（只读）
+    cooldown: Arc<CooldownManager>,
     /// 可用 Provider 列表
     providers: Vec<String>,
     /// 路由配置
@@ -61,10 +64,12 @@ impl RoutingEngine {
     pub fn new(
         account_states: Arc<AccountStateStore>,
         provider_health: Arc<ProviderHealthStore>,
+        cooldown: Arc<CooldownManager>,
     ) -> Self {
         Self {
             account_states,
             provider_health,
+            cooldown,
             providers: vec![
                 "openai".to_string(),
                 "claude".to_string(),
@@ -78,11 +83,13 @@ impl RoutingEngine {
     pub fn with_config(
         account_states: Arc<AccountStateStore>,
         provider_health: Arc<ProviderHealthStore>,
+        cooldown: Arc<CooldownManager>,
         config: RoutingConfig,
     ) -> Self {
         Self {
             account_states,
             provider_health,
+            cooldown,
             providers: vec![
                 "openai".to_string(),
                 "claude".to_string(),
@@ -120,6 +127,7 @@ impl RoutingEngine {
     /// Layer1: 模型路由
     ///
     /// 根据模型、价格、延迟、成功率、健康评分对 Provider 排序
+    /// 同时检查 Provider 冷却状态，冷却中的 Provider 会被过滤
     /// 综合评分 = cost_weight * cost_norm + latency_weight * latency_norm
     ///          + success_weight * (1 - success_norm) + health_weight * (1 - health_norm)
     /// 分数越低表示越优先选择
@@ -135,11 +143,32 @@ impl RoutingEngine {
             tracing::warn!("No healthy providers available, falling back to all providers");
         }
         
-        // 使用健康 Provider 列表（如果没有健康的，使用全部）
-        let candidates = if healthy_providers.is_empty() {
+        // 再过滤掉冷却中的 Provider
+        let available_providers: Vec<String> = healthy_providers
+            .into_iter()
+            .filter(|p| {
+                let cooling = self.cooldown.is_provider_cooling(p);
+                if cooling {
+                    let remaining = self.cooldown.provider_cooldown_remaining(p);
+                    tracing::debug!(
+                        provider = %p,
+                        remaining_secs = remaining.map(|d| d.as_secs()),
+                        "Provider is cooling down, skipping"
+                    );
+                }
+                !cooling
+            })
+            .collect();
+        
+        if available_providers.is_empty() {
+            tracing::warn!("No available providers (all cooling down), falling back to all providers");
+        }
+        
+        // 使用可用 Provider 列表（如果没有可用的，使用全部）
+        let candidates = if available_providers.is_empty() {
             &self.providers
         } else {
-            &healthy_providers
+            &available_providers
         };
 
         // 计算每个 Provider 的综合评分
@@ -265,7 +294,7 @@ impl RoutingEngine {
     ///
     /// 为指定 Provider 选择最优账号
     /// score = current_rpm/rpm_limit + error_rate*2
-    /// 同时检查 Provider 健康状态，不健康的 Provider 直接跳过
+    /// 同时检查 Provider 健康状态和冷却状态
     async fn select_account(&self, provider: &str) -> Result<Option<ExecutionTarget>> {
         // 首先检查 Provider 是否健康
         if !self.provider_health.is_healthy(provider) {
@@ -276,15 +305,35 @@ impl RoutingEngine {
             );
             return Ok(None);
         }
+        
+        // 检查 Provider 是否在冷却中
+        if self.cooldown.is_provider_cooling(provider) {
+            let remaining = self.cooldown.provider_cooldown_remaining(provider);
+            tracing::warn!(
+                provider = %provider,
+                remaining_secs = remaining.map(|d| d.as_secs()),
+                "Provider is cooling down, skipping"
+            );
+            return Ok(None);
+        }
 
         // TODO: 从数据库加载该 Provider 的可用账号
         // 这里简化处理，返回模拟数据
 
         let account_id = Uuid::new_v4();
 
-        // 检查账号是否在冷却中
-        if self.account_states.is_cooling_down(&account_id) {
-            tracing::debug!(provider = %provider, "Account is cooling down, skipping");
+        // 检查账号是否在冷却中（双重检查：AccountStateStore + CooldownManager）
+        let account_cooling = self.account_states.is_cooling_down(&account_id)
+            || self.cooldown.is_account_cooling(&account_id);
+        
+        if account_cooling {
+            let remaining = self.cooldown.account_cooldown_remaining(&account_id);
+            tracing::debug!(
+                provider = %provider,
+                account_id = %account_id,
+                remaining_secs = remaining.map(|d| d.as_secs()),
+                "Account is cooling down, skipping"
+            );
             return Ok(None);
         }
 
@@ -312,6 +361,31 @@ impl RoutingEngine {
     /// 检查 Provider 是否健康
     pub fn is_provider_healthy(&self, provider: &str) -> bool {
         self.provider_health.is_healthy(provider)
+    }
+    
+    /// 获取冷却管理器（只读访问）
+    pub fn cooldown(&self) -> &Arc<CooldownManager> {
+        &self.cooldown
+    }
+    
+    /// 检查 Provider 是否在冷却中
+    pub fn is_provider_cooling(&self, provider: &str) -> bool {
+        self.cooldown.is_provider_cooling(provider)
+    }
+    
+    /// 检查账号是否在冷却中
+    pub fn is_account_cooling(&self, account_id: &Uuid) -> bool {
+        self.cooldown.is_account_cooling(account_id)
+    }
+    
+    /// 获取 Provider 冷却剩余时间
+    pub fn provider_cooldown_remaining(&self, provider: &str) -> Option<std::time::Duration> {
+        self.cooldown.provider_cooldown_remaining(provider)
+    }
+    
+    /// 获取账号冷却剩余时间
+    pub fn account_cooldown_remaining(&self, account_id: &Uuid) -> Option<std::time::Duration> {
+        self.cooldown.account_cooldown_remaining(account_id)
     }
 
     /// 获取配置的所有 Provider 列表
@@ -377,7 +451,8 @@ mod tests {
     fn create_test_engine() -> RoutingEngine {
         let account_states = Arc::new(AccountStateStore::new());
         let provider_health = Arc::new(ProviderHealthStore::new());
-        RoutingEngine::new(account_states, provider_health)
+        let cooldown = Arc::new(CooldownManager::new());
+        RoutingEngine::new(account_states, provider_health, cooldown)
     }
 
     #[tokio::test]
@@ -421,13 +496,14 @@ mod tests {
     fn test_provider_health_integration() {
         let account_states = Arc::new(AccountStateStore::new());
         let provider_health = Arc::new(ProviderHealthStore::new());
+        let cooldown = Arc::new(CooldownManager::new());
         
         // 模拟一些请求数据
         provider_health.record_success("openai", 100);
         provider_health.record_success("openai", 150);
         provider_health.record_failure("claude");
         
-        let engine = RoutingEngine::new(account_states, provider_health);
+        let engine = RoutingEngine::new(account_states, provider_health, cooldown);
         
         // 检查健康状态
         assert!(engine.is_provider_healthy("openai"));
@@ -443,13 +519,14 @@ mod tests {
     fn test_unhealthy_provider_filtering() {
         let account_states = Arc::new(AccountStateStore::new());
         let provider_health = Arc::new(ProviderHealthStore::new());
+        let cooldown = Arc::new(CooldownManager::new());
         
         // 让 claude 多次失败变得不健康
         for _ in 0..10 {
             provider_health.record_failure("claude");
         }
         
-        let engine = RoutingEngine::new(account_states, provider_health);
+        let engine = RoutingEngine::new(account_states, provider_health, cooldown);
         
         // claude 应该被标记为不健康
         assert!(!engine.is_provider_healthy("claude"));
@@ -472,7 +549,8 @@ mod tests {
         
         let account_states = Arc::new(AccountStateStore::new());
         let provider_health = Arc::new(ProviderHealthStore::new());
-        let mut engine = RoutingEngine::new(account_states, provider_health);
+        let cooldown = Arc::new(CooldownManager::new());
+        let mut engine = RoutingEngine::new(account_states, provider_health, cooldown);
         
         engine.set_config(config.clone());
         
@@ -512,5 +590,80 @@ mod tests {
         assert!(engine.calculate_latency_score(50) < engine.calculate_latency_score(200));
         assert!(engine.calculate_latency_score(200) < engine.calculate_latency_score(500));
         assert!(engine.calculate_latency_score(500) < engine.calculate_latency_score(1500));
+    }
+
+    #[test]
+    fn test_cooldown_manager_integration() {
+        let account_states = Arc::new(AccountStateStore::new());
+        let provider_health = Arc::new(ProviderHealthStore::new());
+        let cooldown = Arc::new(CooldownManager::new());
+        
+        let engine = RoutingEngine::new(account_states, provider_health, cooldown.clone());
+        
+        // 初始状态不应该在冷却中
+        assert!(!engine.is_provider_cooling("openai"));
+        assert!(!engine.is_account_cooling(&Uuid::new_v4()));
+        
+        // 设置 Provider 冷却
+        cooldown.set_provider_cooldown(
+            "openai",
+            Some(std::time::Duration::from_secs(60)),
+            keycompute_runtime::CooldownReason::ConsecutiveErrors,
+        );
+        
+        // 现在应该在冷却中
+        assert!(engine.is_provider_cooling("openai"));
+        assert!(engine.provider_cooldown_remaining("openai").is_some());
+        
+        // 其他 Provider 不应该受影响
+        assert!(!engine.is_provider_cooling("claude"));
+    }
+
+    #[test]
+    fn test_provider_cooldown_filtering() {
+        let account_states = Arc::new(AccountStateStore::new());
+        let provider_health = Arc::new(ProviderHealthStore::new());
+        let cooldown = Arc::new(CooldownManager::new());
+        
+        let engine = RoutingEngine::new(account_states, provider_health, cooldown.clone());
+        
+        // 设置 openai 冷却
+        cooldown.set_provider_cooldown(
+            "openai",
+            Some(std::time::Duration::from_secs(60)),
+            keycompute_runtime::CooldownReason::CircuitBreaker,
+        );
+        
+        // openai 应该在冷却中
+        assert!(engine.is_provider_cooling("openai"));
+        
+        // claude 和 deepseek 不应该在冷却中
+        assert!(!engine.is_provider_cooling("claude"));
+        assert!(!engine.is_provider_cooling("deepseek"));
+    }
+
+    #[test]
+    fn test_account_cooldown_check() {
+        let account_states = Arc::new(AccountStateStore::new());
+        let provider_health = Arc::new(ProviderHealthStore::new());
+        let cooldown = Arc::new(CooldownManager::new());
+        
+        let engine = RoutingEngine::new(account_states, provider_health, cooldown.clone());
+        
+        let account_id = Uuid::new_v4();
+        
+        // 初始状态
+        assert!(!engine.is_account_cooling(&account_id));
+        
+        // 设置账号冷却
+        cooldown.set_account_cooldown(
+            account_id,
+            Some(std::time::Duration::from_secs(30)),
+            keycompute_runtime::CooldownReason::RpmLimitExceeded,
+        );
+        
+        // 现在应该在冷却中
+        assert!(engine.is_account_cooling(&account_id));
+        assert!(engine.account_cooldown_remaining(&account_id).is_some());
     }
 }
