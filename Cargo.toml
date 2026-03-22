@@ -13,6 +13,7 @@ dioxus = { version = "0.7.1" }
 
 # workspace crates
 keycompute-types = { path = "crates/keycompute-types" }
+keycompute-runtime = { path = "crates/keycompute-runtime" }
 keycompute-provider-trait = { path = "crates/llm-provider/keycompute-provider-trait" }
 keycompute-openai = { path = "crates/llm-provider/keycompute-openai" }
 ui = { path = "packages/ui" }

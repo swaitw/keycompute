@@ -3176,6 +3176,13 @@ version = "0.1.0"
 [[package]]
 name = "keycompute-runtime"
 version = "0.1.0"
+dependencies = [
+ "dashmap",
+ "keycompute-types",
+ "tokio",
+ "tracing",
+ "uuid",
+]
 
 [[package]]
 name = "keycompute-types"
