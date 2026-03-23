@@ -88,13 +88,9 @@ impl HttpClient {
 
     /// 执行请求并返回响应
     pub async fn execute(&self, request: RequestBuilder) -> keycompute_types::Result<Response> {
-        request
-            .send()
-            .await
-            .map_err(|e| keycompute_types::KeyComputeError::ProviderError(format!(
-                "HTTP request failed: {}",
-                e
-            )))
+        request.send().await.map_err(|e| {
+            keycompute_types::KeyComputeError::ProviderError(format!("HTTP request failed: {}", e))
+        })
     }
 
     /// 执行流式请求
@@ -104,13 +100,12 @@ impl HttpClient {
         &self,
         request: RequestBuilder,
     ) -> keycompute_types::Result<impl Stream<Item = Result<Bytes, reqwest::Error>>> {
-        let response = request
-            .send()
-            .await
-            .map_err(|e| keycompute_types::KeyComputeError::ProviderError(format!(
+        let response = request.send().await.map_err(|e| {
+            keycompute_types::KeyComputeError::ProviderError(format!(
                 "HTTP stream request failed: {}",
                 e
-            )))?;
+            ))
+        })?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -167,10 +162,12 @@ impl HttpTransport for HttpClient {
             .timeout(self.config.request_timeout)
             .send()
             .await
-            .map_err(|e| keycompute_types::KeyComputeError::ProviderError(format!(
-                "HTTP request failed: {}",
-                e
-            )))?;
+            .map_err(|e| {
+                keycompute_types::KeyComputeError::ProviderError(format!(
+                    "HTTP request failed: {}",
+                    e
+                ))
+            })?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -184,13 +181,12 @@ impl HttpTransport for HttpClient {
             )));
         }
 
-        response
-            .text()
-            .await
-            .map_err(|e| keycompute_types::KeyComputeError::ProviderError(format!(
+        response.text().await.map_err(|e| {
+            keycompute_types::KeyComputeError::ProviderError(format!(
                 "Failed to read response: {}",
                 e
-            )))
+            ))
+        })
     }
 
     async fn post_stream(
@@ -210,10 +206,12 @@ impl HttpTransport for HttpClient {
             .timeout(self.config.stream_timeout)
             .send()
             .await
-            .map_err(|e| keycompute_types::KeyComputeError::ProviderError(format!(
-                "HTTP stream request failed: {}",
-                e
-            )))?;
+            .map_err(|e| {
+                keycompute_types::KeyComputeError::ProviderError(format!(
+                    "HTTP stream request failed: {}",
+                    e
+                ))
+            })?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -229,10 +227,9 @@ impl HttpTransport for HttpClient {
 
         // 转换字节流
         let stream = response.bytes_stream().map(|result| {
-            result.map_err(|e| keycompute_types::KeyComputeError::ProviderError(format!(
-                "Stream error: {}",
-                e
-            )))
+            result.map_err(|e| {
+                keycompute_types::KeyComputeError::ProviderError(format!("Stream error: {}", e))
+            })
         });
 
         Ok(Box::pin(stream))
@@ -301,10 +298,7 @@ mod tests {
         let client = HttpClient::new(&config, None);
 
         let request_id = uuid::Uuid::new_v4();
-        let _request = client.post_with_tracing(
-            "https://api.example.com/v1/chat",
-            request_id,
-            "openai",
-        );
+        let _request =
+            client.post_with_tracing("https://api.example.com/v1/chat", request_id, "openai");
     }
 }

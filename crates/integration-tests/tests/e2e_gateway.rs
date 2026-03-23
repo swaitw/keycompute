@@ -266,7 +266,9 @@ async fn test_gateway_fallback_chain() {
     // 使用默认 HTTP 传输层
     let transport = keycompute_provider_trait::DefaultHttpTransport::new();
 
-    let primary_result = failing_provider.stream_chat(&transport, request.clone()).await;
+    let primary_result = failing_provider
+        .stream_chat(&transport, request.clone())
+        .await;
     chain.add_step(
         "llm-gateway",
         "primary_provider_failure",

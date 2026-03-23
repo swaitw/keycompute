@@ -15,7 +15,9 @@ use crate::protocol::OpenAIStreamResponse;
 /// 解析 OpenAI SSE 流
 ///
 /// 将 HTTP 传输层的字节流转换为标准化的 StreamEvent 流
-pub fn parse_openai_stream(stream: ByteStream) -> Pin<Box<dyn Stream<Item = Result<StreamEvent>> + Send>> {
+pub fn parse_openai_stream(
+    stream: ByteStream,
+) -> Pin<Box<dyn Stream<Item = Result<StreamEvent>> + Send>> {
     let (tx, rx) = mpsc::channel::<Result<StreamEvent>>(100);
 
     tokio::spawn(async move {

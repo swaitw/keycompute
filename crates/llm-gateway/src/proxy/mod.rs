@@ -13,18 +13,18 @@
 //! > `Internal HTTP Proxy Module` 不是独立业务层，而是 `LLM Gateway` 的传输子模块，
 //! > 用于统一上游连接、超时、重试与代理出口。
 
+pub mod client;
 pub mod config;
 pub mod proxy;
-pub mod client;
 pub mod request;
 
+pub use client::HttpClient;
 pub use config::ProxyConfig;
 pub use proxy::ProxySelector;
-pub use client::HttpClient;
 pub use request::ProxyRequest;
 
-use std::sync::Arc;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 /// Internal HTTP Proxy
 ///
@@ -142,11 +142,11 @@ mod tests {
         proxies.insert("claude".to_string(), "http://proxy2:8080".to_string());
 
         let proxy = HttpProxy::with_proxies(ProxyConfig::default(), proxies);
-        
+
         // 有代理的 Provider
         let client = proxy.client_for_provider("openai");
         assert!(client.is_shared());
-        
+
         // 无代理的 Provider
         let client = proxy.client_for_provider("unknown");
         assert!(client.is_shared());
@@ -156,7 +156,7 @@ mod tests {
     fn test_add_proxy() {
         let mut proxy = HttpProxy::new(ProxyConfig::default());
         proxy.add_proxy("deepseek".to_string(), "http://proxy:8080".to_string());
-        
+
         let client = proxy.client_for_provider("deepseek");
         assert!(client.is_shared());
     }

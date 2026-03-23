@@ -119,10 +119,7 @@ pub async fn check_provider_health(
             error: if health.healthy {
                 None
             } else {
-                Some(format!(
-                    "Success rate too low: {:.1}%",
-                    health.success_rate
-                ))
+                Some(format!("Success rate too low: {:.1}%", health.success_rate))
             },
             models: vec![], // TODO: 从 Provider 获取支持的模型
         }))

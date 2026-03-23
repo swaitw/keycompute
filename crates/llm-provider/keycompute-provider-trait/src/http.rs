@@ -19,7 +19,12 @@ use std::time::Duration;
 #[async_trait]
 pub trait HttpTransport: Send + Sync + std::fmt::Debug {
     /// 发送 POST 请求并返回响应体
-    async fn post_json(&self, url: &str, headers: Vec<(String, String)>, body: String) -> Result<String>;
+    async fn post_json(
+        &self,
+        url: &str,
+        headers: Vec<(String, String)>,
+        body: String,
+    ) -> Result<String>;
 
     /// 发送 POST 请求并返回字节流（用于 SSE）
     async fn post_stream(
@@ -90,27 +95,42 @@ impl DefaultHttpTransport {
 
 #[async_trait]
 impl HttpTransport for DefaultHttpTransport {
-    async fn post_json(&self, url: &str, headers: Vec<(String, String)>, body: String) -> Result<String> {
+    async fn post_json(
+        &self,
+        url: &str,
+        headers: Vec<(String, String)>,
+        body: String,
+    ) -> Result<String> {
         let response = self
             .build_request(reqwest::Method::POST, url, headers, body)
             .timeout(self.request_timeout)
             .send()
             .await
-            .map_err(|e| keycompute_types::KeyComputeError::ProviderError(format!("HTTP request failed: {}", e)))?;
+            .map_err(|e| {
+                keycompute_types::KeyComputeError::ProviderError(format!(
+                    "HTTP request failed: {}",
+                    e
+                ))
+            })?;
 
         if !response.status().is_success() {
             let status = response.status();
-            let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+            let error_text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
             return Err(keycompute_types::KeyComputeError::ProviderError(format!(
                 "HTTP error ({}): {}",
                 status, error_text
             )));
         }
 
-        response
-            .text()
-            .await
-            .map_err(|e| keycompute_types::KeyComputeError::ProviderError(format!("Failed to read response: {}", e)))
+        response.text().await.map_err(|e| {
+            keycompute_types::KeyComputeError::ProviderError(format!(
+                "Failed to read response: {}",
+                e
+            ))
+        })
     }
 
     async fn post_stream(
@@ -124,11 +144,19 @@ impl HttpTransport for DefaultHttpTransport {
             .timeout(self.stream_timeout)
             .send()
             .await
-            .map_err(|e| keycompute_types::KeyComputeError::ProviderError(format!("HTTP stream request failed: {}", e)))?;
+            .map_err(|e| {
+                keycompute_types::KeyComputeError::ProviderError(format!(
+                    "HTTP stream request failed: {}",
+                    e
+                ))
+            })?;
 
         if !response.status().is_success() {
             let status = response.status();
-            let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+            let error_text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
             return Err(keycompute_types::KeyComputeError::ProviderError(format!(
                 "HTTP error ({}): {}",
                 status, error_text
@@ -137,7 +165,9 @@ impl HttpTransport for DefaultHttpTransport {
 
         // 转换字节流
         let stream = response.bytes_stream().map(|result| {
-            result.map_err(|e| keycompute_types::KeyComputeError::ProviderError(format!("Stream error: {}", e)))
+            result.map_err(|e| {
+                keycompute_types::KeyComputeError::ProviderError(format!("Stream error: {}", e))
+            })
         });
 
         Ok(Box::pin(stream))
@@ -165,10 +195,8 @@ mod tests {
 
     #[test]
     fn test_default_transport_with_timeouts() {
-        let transport = DefaultHttpTransport::with_timeouts(
-            Duration::from_secs(60),
-            Duration::from_secs(300),
-        );
+        let transport =
+            DefaultHttpTransport::with_timeouts(Duration::from_secs(60), Duration::from_secs(300));
         assert_eq!(transport.request_timeout(), Duration::from_secs(60));
         assert_eq!(transport.stream_timeout(), Duration::from_secs(300));
     }

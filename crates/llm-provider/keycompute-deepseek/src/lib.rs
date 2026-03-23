@@ -20,7 +20,7 @@
 
 pub mod adapter;
 
-pub use adapter::{DeepSeekProvider, DEEPSEEK_DEFAULT_ENDPOINT, DEEPSEEK_MODELS};
+pub use adapter::{DEEPSEEK_DEFAULT_ENDPOINT, DEEPSEEK_MODELS, DeepSeekProvider};
 
 // 复用 OpenAI 的协议类型，DeepSeek API 与 OpenAI API 完全兼容
 pub use keycompute_openai::{OpenAIRequest, OpenAIResponse, OpenAIStreamResponse};

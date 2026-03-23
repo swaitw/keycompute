@@ -8,12 +8,27 @@ pub mod cooldown;
 pub mod provider_health;
 pub mod store;
 
+#[cfg(feature = "redis")]
+pub mod redis_store;
+
 pub use account_state::{AccountState, AccountStateStore};
 pub use cooldown::{CooldownEntry, CooldownManager, CooldownReason};
 pub use provider_health::{ProviderHealth, ProviderHealthStore};
 pub use store::RuntimeStore;
 
+#[cfg(feature = "redis")]
+pub use redis_store::RedisRuntimeStore;
+
 use std::sync::Arc;
+
+/// 运行时存储后端类型
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeBackend {
+    /// 内存后端
+    Memory,
+    /// Redis 后端
+    Redis,
+}
 
 /// 运行时状态管理器
 ///
@@ -26,15 +41,18 @@ pub struct RuntimeManager {
     pub providers: Arc<ProviderHealthStore>,
     /// 冷却管理器
     pub cooldown: Arc<CooldownManager>,
+    /// 存储后端类型
+    backend: RuntimeBackend,
 }
 
 impl RuntimeManager {
-    /// 创建新的运行时管理器
+    /// 创建新的运行时管理器（内存后端）
     pub fn new() -> Self {
         Self {
             accounts: Arc::new(AccountStateStore::new()),
             providers: Arc::new(ProviderHealthStore::new()),
             cooldown: Arc::new(CooldownManager::new()),
+            backend: RuntimeBackend::Memory,
         }
     }
 
@@ -48,13 +66,56 @@ impl RuntimeManager {
             accounts,
             providers,
             cooldown,
+            backend: RuntimeBackend::Memory,
         }
+    }
+
+    /// 获取存储后端类型
+    pub fn backend(&self) -> RuntimeBackend {
+        self.backend
     }
 }
 
 impl Default for RuntimeManager {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(feature = "redis")]
+impl RuntimeManager {
+    /// 创建带 Redis 后端的运行时管理器
+    ///
+    /// # 参数
+    /// - `redis_url`: Redis 连接 URL
+    pub fn new_redis(redis_url: &str) -> Result<Self, redis::RedisError> {
+        let store = RedisRuntimeStore::new(redis_url)?;
+        let store = Arc::new(store);
+
+        // TODO: 后续可以扩展 AccountStateStore、ProviderHealthStore、CooldownManager
+        // 支持 Redis 后端，目前保持内存实现
+        Ok(Self {
+            accounts: Arc::new(AccountStateStore::new()),
+            providers: Arc::new(ProviderHealthStore::new()),
+            cooldown: Arc::new(CooldownManager::new()),
+            backend: RuntimeBackend::Redis,
+        })
+    }
+
+    /// 创建带 Redis 后端的运行时管理器（带自定义前缀）
+    pub fn new_redis_with_prefix(
+        redis_url: &str,
+        prefix: impl Into<String>,
+    ) -> Result<Self, redis::RedisError> {
+        let store = RedisRuntimeStore::with_prefix(redis_url, prefix)?;
+        let _store = Arc::new(store);
+
+        Ok(Self {
+            accounts: Arc::new(AccountStateStore::new()),
+            providers: Arc::new(ProviderHealthStore::new()),
+            cooldown: Arc::new(CooldownManager::new()),
+            backend: RuntimeBackend::Redis,
+        })
     }
 }
 

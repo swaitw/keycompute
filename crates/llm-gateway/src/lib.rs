@@ -21,7 +21,7 @@ pub mod streaming;
 pub use executor::GatewayExecutor;
 pub use failover::FailoverManager;
 pub use normalize::RequestNormalizer;
-pub use proxy::{HttpProxy, HttpClient, ProxyConfig, ProxySelector, ProxyRequest};
+pub use proxy::{HttpClient, HttpProxy, ProxyConfig, ProxyRequest, ProxySelector};
 pub use retry::RetryPolicy;
 pub use streaming::{StreamPipeline, StreamingContext};
 

@@ -43,7 +43,11 @@ pub trait ProviderAdapter: Send + Sync + std::fmt::Debug {
     ) -> Result<StreamBox>;
 
     /// 非流式请求（默认通过 stream 实现）
-    async fn chat(&self, transport: &dyn HttpTransport, request: UpstreamRequest) -> Result<String> {
+    async fn chat(
+        &self,
+        transport: &dyn HttpTransport,
+        request: UpstreamRequest,
+    ) -> Result<String> {
         let mut stream = self.stream_chat(transport, request).await?;
         let mut content = String::new();
 

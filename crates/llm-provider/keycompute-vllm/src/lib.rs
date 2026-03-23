@@ -28,7 +28,7 @@
 
 pub mod adapter;
 
-pub use adapter::{VllmProvider, VLLM_DEFAULT_ENDPOINT, VLLM_COMMON_MODELS};
+pub use adapter::{VLLM_COMMON_MODELS, VLLM_DEFAULT_ENDPOINT, VllmProvider};
 
 // 复用 OpenAI 的协议类型，vLLM API 与 OpenAI API 完全兼容
 pub use keycompute_openai::{OpenAIRequest, OpenAIResponse, OpenAIStreamResponse};

@@ -38,7 +38,8 @@ impl ProxySelector {
 
     /// 添加 Provider 级代理
     pub fn add_proxy(&mut self, provider: impl Into<String>, proxy_url: impl Into<String>) {
-        self.provider_proxies.insert(provider.into(), proxy_url.into());
+        self.provider_proxies
+            .insert(provider.into(), proxy_url.into());
     }
 
     /// 添加账号级代理
@@ -59,7 +60,8 @@ impl ProxySelector {
     /// - `?` 匹配单个字符
     /// - `*-cn` 匹配以 `-cn` 结尾的 provider
     pub fn add_pattern(&mut self, pattern: impl Into<String>, proxy_url: impl Into<String>) {
-        self.pattern_proxies.push((pattern.into(), proxy_url.into()));
+        self.pattern_proxies
+            .push((pattern.into(), proxy_url.into()));
     }
 
     /// 为 Provider 选择代理
@@ -172,8 +174,14 @@ mod tests {
         let mut selector = ProxySelector::new();
         selector.add_pattern("openai-*", "http://openai-proxy:8080");
 
-        assert_eq!(selector.select("openai-us"), Some("http://openai-proxy:8080"));
-        assert_eq!(selector.select("openai-eu"), Some("http://openai-proxy:8080"));
+        assert_eq!(
+            selector.select("openai-us"),
+            Some("http://openai-proxy:8080")
+        );
+        assert_eq!(
+            selector.select("openai-eu"),
+            Some("http://openai-proxy:8080")
+        );
         assert_eq!(selector.select("claude"), None);
     }
 
@@ -206,9 +214,15 @@ mod tests {
         selector.add_pattern("openai-*", "http://pattern-proxy:8080");
 
         // 精确匹配优先
-        assert_eq!(selector.select("openai"), Some("http://provider-proxy:8080"));
+        assert_eq!(
+            selector.select("openai"),
+            Some("http://provider-proxy:8080")
+        );
 
         // 通配符匹配
-        assert_eq!(selector.select("openai-us"), Some("http://pattern-proxy:8080"));
+        assert_eq!(
+            selector.select("openai-us"),
+            Some("http://pattern-proxy:8080")
+        );
     }
 }

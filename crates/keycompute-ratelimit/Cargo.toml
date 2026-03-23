@@ -7,6 +7,13 @@ edition = "2024"
 keycompute-types = { workspace = true }
 async-trait = "0.1"
 dashmap = "6"
+redis = { version = "0.25", features = ["tokio-comp", "connection-manager"], optional = true }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
 tokio = { version = "1", features = ["sync", "time", "rt", "macros"] }
 tracing = "0.1"
-uuid = { version = "1", features = ["v4"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+
+[features]
+default = []
+redis = ["dep:redis"]

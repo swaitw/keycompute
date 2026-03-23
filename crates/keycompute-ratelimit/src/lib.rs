@@ -1,6 +1,6 @@
 //! Rate Limit Module
 //!
-//! 限流模块，支持内存后端，按 user/tenant/key 多维度限流。
+//! 限流模块，支持内存后端和 Redis 后端，按 user/tenant/key 多维度限流。
 
 use async_trait::async_trait;
 use dashmap::DashMap;
@@ -9,6 +9,12 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use uuid::Uuid;
+
+#[cfg(feature = "redis")]
+pub mod redis;
+
+#[cfg(feature = "redis")]
+pub use redis::RedisRateLimiter;
 
 /// 限流键
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]
@@ -181,11 +187,23 @@ impl RateLimiter for MemoryRateLimiter {
 /// 限流服务
 pub struct RateLimitService {
     limiter: std::sync::Arc<dyn RateLimiter>,
+    backend: RateLimitBackend,
+}
+
+/// 限流后端类型
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RateLimitBackend {
+    /// 内存后端
+    Memory,
+    /// Redis 后端
+    Redis,
 }
 
 impl std::fmt::Debug for RateLimitService {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("RateLimitService").finish()
+        f.debug_struct("RateLimitService")
+            .field("backend", &self.backend)
+            .finish()
     }
 }
 
@@ -193,19 +211,28 @@ impl Clone for RateLimitService {
     fn clone(&self) -> Self {
         Self {
             limiter: Arc::clone(&self.limiter),
+            backend: self.backend,
         }
     }
 }
 
 impl RateLimitService {
     /// 创建新的限流服务
-    pub fn new(limiter: std::sync::Arc<dyn RateLimiter>) -> Self {
-        Self { limiter }
+    pub fn new(limiter: std::sync::Arc<dyn RateLimiter>, backend: RateLimitBackend) -> Self {
+        Self { limiter, backend }
     }
 
     /// 创建默认的内存限流服务
     pub fn default_memory() -> Self {
-        Self::new(std::sync::Arc::new(MemoryRateLimiter::default()))
+        Self::new(
+            std::sync::Arc::new(MemoryRateLimiter::default()),
+            RateLimitBackend::Memory,
+        )
+    }
+
+    /// 获取后端类型
+    pub fn backend(&self) -> RateLimitBackend {
+        self.backend
     }
 
     /// 检查并记录请求
@@ -219,6 +246,31 @@ impl RateLimitService {
     /// 仅检查不限流
     pub async fn check_only(&self, key: &RateLimitKey) -> Result<bool> {
         self.limiter.check(key).await
+    }
+}
+
+#[cfg(feature = "redis")]
+impl RateLimitService {
+    /// 创建 Redis 限流服务
+    pub fn new_redis(redis_url: &str, config: RateLimitConfig) -> Result<Self> {
+        let limiter = RedisRateLimiter::new(redis_url, config)?;
+        Ok(Self::new(
+            std::sync::Arc::new(limiter),
+            RateLimitBackend::Redis,
+        ))
+    }
+
+    /// 创建带前缀的 Redis 限流服务
+    pub fn new_redis_with_prefix(
+        redis_url: &str,
+        config: RateLimitConfig,
+        prefix: impl Into<String>,
+    ) -> Result<Self> {
+        let limiter = RedisRateLimiter::with_prefix(redis_url, config, prefix)?;
+        Ok(Self::new(
+            std::sync::Arc::new(limiter),
+            RateLimitBackend::Redis,
+        ))
     }
 }
 

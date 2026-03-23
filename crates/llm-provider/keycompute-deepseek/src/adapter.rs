@@ -28,7 +28,7 @@ pub const DEEPSEEK_DEFAULT_ENDPOINT: &str = "https://api.deepseek.com/v1/chat/co
 /// DeepSeek 支持的模型列表
 pub const DEEPSEEK_MODELS: &[&str] = &[
     "deepseek-chat",
-    "deepseek-coder", 
+    "deepseek-coder",
     "deepseek-reasoner",
     // 兼容旧版本模型名称
     "deepseek-chat-pro",
@@ -104,19 +104,24 @@ impl DeepSeekProvider {
     ) -> Result<String> {
         let body = self.build_request_body(&request);
         let endpoint = self.get_endpoint(&request);
-        let body_json = serde_json::to_string(&body)
-            .map_err(|e| KeyComputeError::ProviderError(format!("Failed to serialize request: {}", e)))?;
+        let body_json = serde_json::to_string(&body).map_err(|e| {
+            KeyComputeError::ProviderError(format!("Failed to serialize request: {}", e))
+        })?;
 
         let headers = vec![
-            ("Authorization".to_string(), format!("Bearer {}", request.api_key)),
+            (
+                "Authorization".to_string(),
+                format!("Bearer {}", request.api_key),
+            ),
             ("Content-Type".to_string(), "application/json".to_string()),
         ];
 
         let response_text = transport.post_json(&endpoint, headers, body_json).await?;
 
-        let deepseek_response: OpenAIResponse = serde_json::from_str(&response_text).map_err(|e| {
-            KeyComputeError::ProviderError(format!("Failed to parse DeepSeek response: {}", e))
-        })?;
+        let deepseek_response: OpenAIResponse =
+            serde_json::from_str(&response_text).map_err(|e| {
+                KeyComputeError::ProviderError(format!("Failed to parse DeepSeek response: {}", e))
+            })?;
 
         let content = deepseek_response
             .choices
@@ -136,11 +141,15 @@ impl DeepSeekProvider {
     ) -> Result<StreamBox> {
         let body = self.build_request_body(&request);
         let endpoint = self.get_endpoint(&request);
-        let body_json = serde_json::to_string(&body)
-            .map_err(|e| KeyComputeError::ProviderError(format!("Failed to serialize request: {}", e)))?;
+        let body_json = serde_json::to_string(&body).map_err(|e| {
+            KeyComputeError::ProviderError(format!("Failed to serialize request: {}", e))
+        })?;
 
         let headers = vec![
-            ("Authorization".to_string(), format!("Bearer {}", request.api_key)),
+            (
+                "Authorization".to_string(),
+                format!("Bearer {}", request.api_key),
+            ),
             ("Content-Type".to_string(), "application/json".to_string()),
             ("Accept".to_string(), "text/event-stream".to_string()),
         ];
@@ -181,7 +190,11 @@ impl ProviderAdapter for DeepSeekProvider {
         }
     }
 
-    async fn chat(&self, transport: &dyn HttpTransport, request: UpstreamRequest) -> Result<String> {
+    async fn chat(
+        &self,
+        transport: &dyn HttpTransport,
+        request: UpstreamRequest,
+    ) -> Result<String> {
         self.chat_internal(transport, request).await
     }
 }
@@ -215,7 +228,10 @@ mod tests {
 
     #[test]
     fn test_default_endpoint() {
-        assert_eq!(DEEPSEEK_DEFAULT_ENDPOINT, "https://api.deepseek.com/v1/chat/completions");
+        assert_eq!(
+            DEEPSEEK_DEFAULT_ENDPOINT,
+            "https://api.deepseek.com/v1/chat/completions"
+        );
     }
 
     #[test]
@@ -241,14 +257,17 @@ mod tests {
         assert_eq!(body.temperature, Some(0.7));
         // 验证 stream_options 包含 usage
         assert!(body.stream_options.is_some());
-        assert_eq!(body.stream_options.as_ref().unwrap().include_usage, Some(true));
+        assert_eq!(
+            body.stream_options.as_ref().unwrap().include_usage,
+            Some(true)
+        );
     }
 
     #[test]
     fn test_get_endpoint_default() {
         let provider = DeepSeekProvider::new();
         let request = keycompute_provider_trait::UpstreamRequest::new(
-            "",  // 空端点
+            "", // 空端点
             "sk-test",
             "deepseek-chat",
         );

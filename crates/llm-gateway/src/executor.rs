@@ -12,7 +12,7 @@
 //! - 多代理出口支持
 //! - 请求追踪
 
-use crate::{GatewayConfig, streaming::StreamPipeline, HttpProxy};
+use crate::{GatewayConfig, HttpProxy, streaming::StreamPipeline};
 use futures::StreamExt;
 use keycompute_provider_trait::{HttpTransport, ProviderAdapter, StreamEvent, UpstreamRequest};
 use keycompute_runtime::{AccountStateStore, ProviderHealthStore};
@@ -375,7 +375,10 @@ mod tests {
         // 英文：4 字符 ≈ 1 token
         assert_eq!(GatewayExecutor::estimate_tokens("Hello"), 2); // 5 chars
         assert_eq!(GatewayExecutor::estimate_tokens("Hello World"), 3); // 11 chars
-        assert_eq!(GatewayExecutor::estimate_tokens("a".repeat(100).as_str()), 25);
+        assert_eq!(
+            GatewayExecutor::estimate_tokens("a".repeat(100).as_str()),
+            25
+        );
     }
 
     #[test]

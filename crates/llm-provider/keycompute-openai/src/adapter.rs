@@ -72,19 +72,26 @@ impl OpenAIProvider {
         request: UpstreamRequest,
     ) -> Result<String> {
         let body = self.build_request_body(&request);
-        let body_json = serde_json::to_string(&body)
-            .map_err(|e| KeyComputeError::ProviderError(format!("Failed to serialize request: {}", e)))?;
+        let body_json = serde_json::to_string(&body).map_err(|e| {
+            KeyComputeError::ProviderError(format!("Failed to serialize request: {}", e))
+        })?;
 
         let headers = vec![
-            ("Authorization".to_string(), format!("Bearer {}", request.api_key)),
+            (
+                "Authorization".to_string(),
+                format!("Bearer {}", request.api_key),
+            ),
             ("Content-Type".to_string(), "application/json".to_string()),
         ];
 
-        let response_text = transport.post_json(&request.endpoint, headers, body_json).await?;
+        let response_text = transport
+            .post_json(&request.endpoint, headers, body_json)
+            .await?;
 
-        let openai_response: OpenAIResponse = serde_json::from_str(&response_text).map_err(|e| {
-            KeyComputeError::ProviderError(format!("Failed to parse response: {}", e))
-        })?;
+        let openai_response: OpenAIResponse =
+            serde_json::from_str(&response_text).map_err(|e| {
+                KeyComputeError::ProviderError(format!("Failed to parse response: {}", e))
+            })?;
 
         // 提取内容
         let content = openai_response
@@ -104,16 +111,22 @@ impl OpenAIProvider {
         request: UpstreamRequest,
     ) -> Result<StreamBox> {
         let body = self.build_request_body(&request);
-        let body_json = serde_json::to_string(&body)
-            .map_err(|e| KeyComputeError::ProviderError(format!("Failed to serialize request: {}", e)))?;
+        let body_json = serde_json::to_string(&body).map_err(|e| {
+            KeyComputeError::ProviderError(format!("Failed to serialize request: {}", e))
+        })?;
 
         let headers = vec![
-            ("Authorization".to_string(), format!("Bearer {}", request.api_key)),
+            (
+                "Authorization".to_string(),
+                format!("Bearer {}", request.api_key),
+            ),
             ("Content-Type".to_string(), "application/json".to_string()),
             ("Accept".to_string(), "text/event-stream".to_string()),
         ];
 
-        let byte_stream: ByteStream = transport.post_stream(&request.endpoint, headers, body_json).await?;
+        let byte_stream: ByteStream = transport
+            .post_stream(&request.endpoint, headers, body_json)
+            .await?;
 
         // 转换字节流为 SSE 事件流
         Ok(parse_openai_stream(byte_stream))
@@ -157,7 +170,11 @@ impl ProviderAdapter for OpenAIProvider {
         }
     }
 
-    async fn chat(&self, transport: &dyn HttpTransport, request: UpstreamRequest) -> Result<String> {
+    async fn chat(
+        &self,
+        transport: &dyn HttpTransport,
+        request: UpstreamRequest,
+    ) -> Result<String> {
         self.chat_internal(transport, request).await
     }
 }

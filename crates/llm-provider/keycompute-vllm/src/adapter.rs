@@ -132,13 +132,17 @@ impl VllmProvider {
     ) -> Result<String> {
         let body = self.build_request_body(&request);
         let endpoint = self.get_endpoint(&request);
-        let body_json = serde_json::to_string(&body)
-            .map_err(|e| KeyComputeError::ProviderError(format!("Failed to serialize request: {}", e)))?;
+        let body_json = serde_json::to_string(&body).map_err(|e| {
+            KeyComputeError::ProviderError(format!("Failed to serialize request: {}", e))
+        })?;
 
         let headers = vec![
             ("Content-Type".to_string(), "application/json".to_string()),
             // vLLM 本地部署通常不需要 API Key，但支持可选的 Authorization
-            ("Authorization".to_string(), format!("Bearer {}", request.api_key)),
+            (
+                "Authorization".to_string(),
+                format!("Bearer {}", request.api_key),
+            ),
         ];
 
         let response_text = transport.post_json(&endpoint, headers, body_json).await?;
@@ -165,13 +169,17 @@ impl VllmProvider {
     ) -> Result<StreamBox> {
         let body = self.build_request_body(&request);
         let endpoint = self.get_endpoint(&request);
-        let body_json = serde_json::to_string(&body)
-            .map_err(|e| KeyComputeError::ProviderError(format!("Failed to serialize request: {}", e)))?;
+        let body_json = serde_json::to_string(&body).map_err(|e| {
+            KeyComputeError::ProviderError(format!("Failed to serialize request: {}", e))
+        })?;
 
         let headers = vec![
             ("Content-Type".to_string(), "application/json".to_string()),
             ("Accept".to_string(), "text/event-stream".to_string()),
-            ("Authorization".to_string(), format!("Bearer {}", request.api_key)),
+            (
+                "Authorization".to_string(),
+                format!("Bearer {}", request.api_key),
+            ),
         ];
 
         let byte_stream: ByteStream = transport.post_stream(&endpoint, headers, body_json).await?;
@@ -233,7 +241,11 @@ impl ProviderAdapter for VllmProvider {
         }
     }
 
-    async fn chat(&self, transport: &dyn HttpTransport, request: UpstreamRequest) -> Result<String> {
+    async fn chat(
+        &self,
+        transport: &dyn HttpTransport,
+        request: UpstreamRequest,
+    ) -> Result<String> {
         self.chat_internal(transport, request).await
     }
 }
@@ -271,7 +283,10 @@ mod tests {
 
     #[test]
     fn test_default_endpoint() {
-        assert_eq!(VLLM_DEFAULT_ENDPOINT, "http://localhost:8000/v1/chat/completions");
+        assert_eq!(
+            VLLM_DEFAULT_ENDPOINT,
+            "http://localhost:8000/v1/chat/completions"
+        );
     }
 
     #[test]
@@ -326,10 +341,7 @@ mod tests {
 
     #[test]
     fn test_with_models() {
-        let custom_models = vec![
-            "custom/model-1".to_string(),
-            "custom/model-2".to_string(),
-        ];
+        let custom_models = vec!["custom/model-1".to_string(), "custom/model-2".to_string()];
         let provider = VllmProvider::with_models(custom_models);
 
         assert!(provider.supports_model("custom/model-1"));

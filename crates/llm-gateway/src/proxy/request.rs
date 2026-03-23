@@ -90,8 +90,10 @@ impl ProxyRequest {
 
     /// 设置 Authorization 头
     pub fn authorization(mut self, token: impl Into<String>) -> Self {
-        self.headers
-            .insert("Authorization".to_string(), format!("Bearer {}", token.into()));
+        self.headers.insert(
+            "Authorization".to_string(),
+            format!("Bearer {}", token.into()),
+        );
         self
     }
 
@@ -139,10 +141,7 @@ impl ProxyRequest {
     }
 
     /// 构建为 reqwest::RequestBuilder
-    pub fn build(
-        &self,
-        client: &crate::proxy::HttpClient,
-    ) -> reqwest::RequestBuilder {
+    pub fn build(&self, client: &crate::proxy::HttpClient) -> reqwest::RequestBuilder {
         let mut builder = match self.method {
             HttpMethod::GET => client.get(&self.url),
             HttpMethod::POST => client.post(&self.url),
@@ -232,9 +231,18 @@ mod tests {
             .provider("openai")
             .stream(true);
 
-        assert_eq!(req.headers.get("Authorization"), Some(&"Bearer sk-test".to_string()));
-        assert_eq!(req.headers.get("Content-Type"), Some(&"application/json".to_string()));
-        assert_eq!(req.headers.get("Accept"), Some(&"text/event-stream".to_string()));
+        assert_eq!(
+            req.headers.get("Authorization"),
+            Some(&"Bearer sk-test".to_string())
+        );
+        assert_eq!(
+            req.headers.get("Content-Type"),
+            Some(&"application/json".to_string())
+        );
+        assert_eq!(
+            req.headers.get("Accept"),
+            Some(&"text/event-stream".to_string())
+        );
         assert!(req.is_stream);
     }
 
@@ -245,11 +253,13 @@ mod tests {
             "messages": [{"role": "user", "content": "Hello"}]
         });
 
-        let req = ProxyRequest::post("https://api.example.com/v1/chat")
-            .json(&body);
+        let req = ProxyRequest::post("https://api.example.com/v1/chat").json(&body);
 
         assert!(req.body.is_some());
-        assert_eq!(req.headers.get("Content-Type"), Some(&"application/json".to_string()));
+        assert_eq!(
+            req.headers.get("Content-Type"),
+            Some(&"application/json".to_string())
+        );
     }
 
     #[test]
