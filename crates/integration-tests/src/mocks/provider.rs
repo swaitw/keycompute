@@ -2,7 +2,9 @@
 
 use async_trait::async_trait;
 use futures::stream;
-use keycompute_provider_trait::{ProviderAdapter, StreamBox, StreamEvent, UpstreamRequest};
+use keycompute_provider_trait::{
+    HttpTransport, ProviderAdapter, StreamBox, StreamEvent, UpstreamRequest,
+};
 use keycompute_types::KeyComputeError;
 use std::sync::Mutex;
 
@@ -67,7 +69,11 @@ impl ProviderAdapter for MockProvider {
         self.supported_models.clone()
     }
 
-    async fn stream_chat(&self, _request: UpstreamRequest) -> keycompute_types::Result<StreamBox> {
+    async fn stream_chat(
+        &self,
+        _transport: &dyn HttpTransport,
+        _request: UpstreamRequest,
+    ) -> keycompute_types::Result<StreamBox> {
         if self.should_fail {
             return Err(KeyComputeError::ProviderError("Mock failure".to_string()));
         }
@@ -154,8 +160,10 @@ mod tests {
         let provider = MockProviderFactory::create_openai();
         let request = UpstreamRequest::new("http://test", "test-key", "gpt-4o");
 
+        // 使用默认 HTTP 传输层
+        let transport = keycompute_provider_trait::DefaultHttpTransport::new();
         let mut stream: keycompute_provider_trait::StreamBox =
-            provider.stream_chat(request).await.unwrap();
+            provider.stream_chat(&transport, request).await.unwrap();
         let mut events = Vec::new();
 
         while let Some(event) = stream.next().await {
@@ -171,8 +179,10 @@ mod tests {
         let provider = MockProviderFactory::create_failing();
         let request = UpstreamRequest::new("http://test", "test-key", "gpt-4o");
 
+        // 使用默认 HTTP 传输层
+        let transport = keycompute_provider_trait::DefaultHttpTransport::new();
         let result: Result<keycompute_provider_trait::StreamBox, _> =
-            provider.stream_chat(request).await;
+            provider.stream_chat(&transport, request).await;
         assert!(result.is_err());
     }
 }

@@ -191,7 +191,8 @@ async fn test_gateway_provider_stream() {
             .with_message("user", "Hello");
 
     // 3. 执行流请求
-    let stream = provider.stream_chat(request).await;
+    let transport = keycompute_provider_trait::DefaultHttpTransport::new();
+    let stream = provider.stream_chat(&transport, request).await;
     chain.add_step(
         "keycompute-provider-trait",
         "ProviderAdapter::stream_chat",
@@ -262,7 +263,10 @@ async fn test_gateway_fallback_chain() {
     let request =
         keycompute_provider_trait::UpstreamRequest::new("http://mock", "mock-key", "gpt-4o");
 
-    let primary_result = failing_provider.stream_chat(request.clone()).await;
+    // 使用默认 HTTP 传输层
+    let transport = keycompute_provider_trait::DefaultHttpTransport::new();
+
+    let primary_result = failing_provider.stream_chat(&transport, request.clone()).await;
     chain.add_step(
         "llm-gateway",
         "primary_provider_failure",
@@ -271,7 +275,7 @@ async fn test_gateway_fallback_chain() {
     );
 
     // 3. Fallback 到备用 Provider
-    let fallback_result = success_provider.stream_chat(request).await;
+    let fallback_result = success_provider.stream_chat(&transport, request).await;
     chain.add_step(
         "llm-gateway",
         "fallback_provider_success",

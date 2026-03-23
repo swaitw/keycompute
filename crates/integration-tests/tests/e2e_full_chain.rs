@@ -83,8 +83,9 @@ async fn test_full_request_chain() {
         keycompute_provider_trait::UpstreamRequest::new("http://mock-openai", "mock-key", "gpt-4o")
             .with_message("user", "Hello");
 
+    let transport = keycompute_provider_trait::DefaultHttpTransport::new();
     let mut stream: keycompute_provider_trait::StreamBox =
-        provider.stream_chat(upstream_request).await.unwrap();
+        provider.stream_chat(&transport, upstream_request).await.unwrap();
     let mut delta_count = 0;
     let mut usage_event = None;
 
@@ -222,8 +223,11 @@ async fn test_fallback_chain() {
     let upstream_request =
         keycompute_provider_trait::UpstreamRequest::new("http://mock", "mock-key", "gpt-4o");
 
+    // 使用默认 HTTP 传输层
+    let transport = keycompute_provider_trait::DefaultHttpTransport::new();
+
     let primary_result: Result<keycompute_provider_trait::StreamBox, _> =
-        failing_provider.stream_chat(upstream_request.clone()).await;
+        failing_provider.stream_chat(&transport, upstream_request.clone()).await;
     chain.add_step(
         "llm-gateway (simulated)",
         "primary_provider_failure",
@@ -233,7 +237,7 @@ async fn test_fallback_chain() {
 
     // 3. 模拟 Fallback 到备用 Provider
     let fallback_result: Result<keycompute_provider_trait::StreamBox, _> =
-        success_provider.stream_chat(upstream_request).await;
+        success_provider.stream_chat(&transport, upstream_request).await;
     chain.add_step(
         "llm-gateway (simulated)",
         "fallback_provider_success",

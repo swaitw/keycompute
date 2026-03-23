@@ -9,6 +9,10 @@
 //! - 高性能推理（PagedAttention、连续批处理）
 //! - 支持流式输出
 //! - 完全 OpenAI API 兼容
+//!
+//! 使用统一 HTTP 传输层：
+//! - 通过 HttpTransport 发送请求
+//! - 支持连接池复用和代理出口
 
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -17,10 +21,11 @@ use keycompute_openai::{
     protocol::{OpenAIMessage, StreamOptions},
     stream::parse_openai_stream,
 };
-use keycompute_provider_trait::{ProviderAdapter, StreamBox, StreamEvent, UpstreamRequest};
+use keycompute_provider_trait::{
+    ByteStream, HttpTransport, ProviderAdapter, StreamBox, StreamEvent, UpstreamRequest,
+};
 use keycompute_types::{KeyComputeError, Result};
-use reqwest::Client;
-use std::time::Duration;
+use serde_json;
 
 /// vLLM 默认 API 端点（本地部署）
 pub const VLLM_DEFAULT_ENDPOINT: &str = "http://localhost:8000/v1/chat/completions";
@@ -51,12 +56,6 @@ pub const VLLM_COMMON_MODELS: &[&str] = &[
 /// vLLM 提供 OpenAI 兼容的 API，因此可以直接复用协议层。
 #[derive(Debug, Clone)]
 pub struct VllmProvider {
-    /// 默认端点
-    default_endpoint: String,
-    /// HTTP 客户端
-    client: Client,
-    /// 请求超时
-    timeout: Duration,
     /// 支持的模型列表（动态配置）
     supported_models: Vec<String>,
 }
@@ -71,29 +70,6 @@ impl VllmProvider {
     /// 创建新的 vLLM Provider
     pub fn new() -> Self {
         Self {
-            default_endpoint: VLLM_DEFAULT_ENDPOINT.to_string(),
-            client: Client::new(),
-            timeout: Duration::from_secs(120),
-            supported_models: VLLM_COMMON_MODELS.iter().map(|s| s.to_string()).collect(),
-        }
-    }
-
-    /// 创建带自定义端点的 Provider
-    pub fn with_endpoint(endpoint: impl Into<String>) -> Self {
-        Self {
-            default_endpoint: endpoint.into(),
-            client: Client::new(),
-            timeout: Duration::from_secs(120),
-            supported_models: VLLM_COMMON_MODELS.iter().map(|s| s.to_string()).collect(),
-        }
-    }
-
-    /// 创建带自定义超时的 Provider
-    pub fn with_timeout(timeout: Duration) -> Self {
-        Self {
-            default_endpoint: VLLM_DEFAULT_ENDPOINT.to_string(),
-            client: Client::new(),
-            timeout,
             supported_models: VLLM_COMMON_MODELS.iter().map(|s| s.to_string()).collect(),
         }
     }
@@ -101,19 +77,6 @@ impl VllmProvider {
     /// 创建带自定义模型列表的 Provider
     pub fn with_models(models: Vec<String>) -> Self {
         Self {
-            default_endpoint: VLLM_DEFAULT_ENDPOINT.to_string(),
-            client: Client::new(),
-            timeout: Duration::from_secs(120),
-            supported_models: models,
-        }
-    }
-
-    /// 创建完整配置的 Provider
-    pub fn with_config(endpoint: impl Into<String>, timeout: Duration, models: Vec<String>) -> Self {
-        Self {
-            default_endpoint: endpoint.into(),
-            client: Client::new(),
-            timeout,
             supported_models: models,
         }
     }
@@ -153,47 +116,34 @@ impl VllmProvider {
     }
 
     /// 获取实际请求端点
-    fn get_endpoint<'a>(&'a self, request: &'a UpstreamRequest) -> &'a str {
+    fn get_endpoint(&self, request: &UpstreamRequest) -> String {
         if request.endpoint.is_empty() {
-            &self.default_endpoint
+            VLLM_DEFAULT_ENDPOINT.to_string()
         } else {
-            &request.endpoint
+            request.endpoint.clone()
         }
     }
 
     /// 执行非流式请求
-    async fn chat_internal(&self, request: UpstreamRequest) -> Result<String> {
+    async fn chat_internal(
+        &self,
+        transport: &dyn HttpTransport,
+        request: UpstreamRequest,
+    ) -> Result<String> {
         let body = self.build_request_body(&request);
         let endpoint = self.get_endpoint(&request);
+        let body_json = serde_json::to_string(&body)
+            .map_err(|e| KeyComputeError::ProviderError(format!("Failed to serialize request: {}", e)))?;
 
-        let response = self
-            .client
-            .post(endpoint)
-            .header("Content-Type", "application/json")
+        let headers = vec![
+            ("Content-Type".to_string(), "application/json".to_string()),
             // vLLM 本地部署通常不需要 API Key，但支持可选的 Authorization
-            .header(
-                "Authorization",
-                format!("Bearer {}", request.api_key),
-            )
-            .json(&body)
-            .timeout(self.timeout)
-            .send()
-            .await
-            .map_err(|e| KeyComputeError::ProviderError(format!("vLLM request failed: {}", e)))?;
+            ("Authorization".to_string(), format!("Bearer {}", request.api_key)),
+        ];
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let error_text = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "Unknown error".to_string());
-            return Err(KeyComputeError::ProviderError(format!(
-                "vLLM API error ({}): {}",
-                status, error_text
-            )));
-        }
+        let response_text = transport.post_json(&endpoint, headers, body_json).await?;
 
-        let vllm_response: OpenAIResponse = response.json().await.map_err(|e| {
+        let vllm_response: OpenAIResponse = serde_json::from_str(&response_text).map_err(|e| {
             KeyComputeError::ProviderError(format!("Failed to parse vLLM response: {}", e))
         })?;
 
@@ -208,40 +158,25 @@ impl VllmProvider {
     }
 
     /// 执行流式请求
-    async fn stream_chat_internal(&self, request: UpstreamRequest) -> Result<StreamBox> {
+    async fn stream_chat_internal(
+        &self,
+        transport: &dyn HttpTransport,
+        request: UpstreamRequest,
+    ) -> Result<StreamBox> {
         let body = self.build_request_body(&request);
         let endpoint = self.get_endpoint(&request);
+        let body_json = serde_json::to_string(&body)
+            .map_err(|e| KeyComputeError::ProviderError(format!("Failed to serialize request: {}", e)))?;
 
-        let response = self
-            .client
-            .post(endpoint)
-            .header("Content-Type", "application/json")
-            .header("Accept", "text/event-stream")
-            .header(
-                "Authorization",
-                format!("Bearer {}", request.api_key),
-            )
-            .json(&body)
-            .timeout(self.timeout)
-            .send()
-            .await
-            .map_err(|e| KeyComputeError::ProviderError(format!("vLLM request failed: {}", e)))?;
+        let headers = vec![
+            ("Content-Type".to_string(), "application/json".to_string()),
+            ("Accept".to_string(), "text/event-stream".to_string()),
+            ("Authorization".to_string(), format!("Bearer {}", request.api_key)),
+        ];
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let error_text = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "Unknown error".to_string());
-            return Err(KeyComputeError::ProviderError(format!(
-                "vLLM API error ({}): {}",
-                status, error_text
-            )));
-        }
-
-        let stream = response.bytes_stream();
+        let byte_stream: ByteStream = transport.post_stream(&endpoint, headers, body_json).await?;
         // 复用 OpenAI 的流解析器，vLLM SSE 格式与 OpenAI 完全兼容
-        Ok(parse_openai_stream(stream))
+        Ok(parse_openai_stream(byte_stream))
     }
 
     /// 添加支持的模型
@@ -278,12 +213,16 @@ impl ProviderAdapter for VllmProvider {
             || model.starts_with("local:") // 本地模型
     }
 
-    async fn stream_chat(&self, request: UpstreamRequest) -> Result<StreamBox> {
+    async fn stream_chat(
+        &self,
+        transport: &dyn HttpTransport,
+        request: UpstreamRequest,
+    ) -> Result<StreamBox> {
         if request.stream {
-            self.stream_chat_internal(request).await
+            self.stream_chat_internal(transport, request).await
         } else {
             // 非流式请求，包装为单事件流
-            let content = self.chat_internal(request).await?;
+            let content = self.chat_internal(transport, request).await?;
             let event = StreamEvent::delta(content);
 
             let stream = futures::stream::once(async move { Ok(event) }).chain(
@@ -294,8 +233,8 @@ impl ProviderAdapter for VllmProvider {
         }
     }
 
-    async fn chat(&self, request: UpstreamRequest) -> Result<String> {
-        self.chat_internal(request).await
+    async fn chat(&self, transport: &dyn HttpTransport, request: UpstreamRequest) -> Result<String> {
+        self.chat_internal(transport, request).await
     }
 }
 

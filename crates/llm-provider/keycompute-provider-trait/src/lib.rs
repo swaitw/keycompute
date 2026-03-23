@@ -7,9 +7,11 @@ use futures::Stream;
 use keycompute_types::Result;
 use std::pin::Pin;
 
+pub mod http;
 pub mod request;
 pub mod stream;
 
+pub use http::{ByteStream, DefaultHttpTransport, HttpTransport};
 pub use request::{UpstreamMessage, UpstreamRequest};
 pub use stream::StreamEvent;
 
@@ -30,11 +32,19 @@ pub trait ProviderAdapter: Send + Sync + std::fmt::Debug {
     }
 
     /// 发起流式请求
-    async fn stream_chat(&self, request: UpstreamRequest) -> Result<StreamBox>;
+    ///
+    /// # 参数
+    /// - `transport`: HTTP 传输层，用于发送请求
+    /// - `request`: 上游请求
+    async fn stream_chat(
+        &self,
+        transport: &dyn HttpTransport,
+        request: UpstreamRequest,
+    ) -> Result<StreamBox>;
 
     /// 非流式请求（默认通过 stream 实现）
-    async fn chat(&self, request: UpstreamRequest) -> Result<String> {
-        let mut stream = self.stream_chat(request).await?;
+    async fn chat(&self, transport: &dyn HttpTransport, request: UpstreamRequest) -> Result<String> {
+        let mut stream = self.stream_chat(transport, request).await?;
         let mut content = String::new();
 
         use futures::StreamExt;

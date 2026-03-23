@@ -14,7 +14,7 @@
 
 use crate::{GatewayConfig, streaming::StreamPipeline, HttpProxy};
 use futures::StreamExt;
-use keycompute_provider_trait::{ProviderAdapter, StreamEvent, UpstreamRequest};
+use keycompute_provider_trait::{HttpTransport, ProviderAdapter, StreamEvent, UpstreamRequest};
 use keycompute_runtime::{AccountStateStore, ProviderHealthStore};
 use keycompute_types::{ExecutionPlan, ExecutionTarget, KeyComputeError, RequestContext, Result};
 use std::collections::HashMap;
@@ -163,11 +163,19 @@ impl GatewayExecutor {
             KeyComputeError::Internal(format!("Provider {} not found", target.provider))
         })?;
 
+        // 获取 HTTP 传输层（优先使用 HttpProxy 中的客户端）
+        let transport: Arc<dyn HttpTransport> = if let Some(ref proxy) = self.http_proxy {
+            Arc::clone(proxy.default_client()) as Arc<dyn HttpTransport>
+        } else {
+            // 使用默认传输
+            Arc::new(keycompute_provider_trait::DefaultHttpTransport::new())
+        };
+
         // 构建上游请求
         let request = self.build_upstream_request(ctx, target);
 
-        // 执行流式请求
-        let mut stream = provider.stream_chat(request).await?;
+        // 执行流式请求（传入 transport）
+        let mut stream = provider.stream_chat(transport.as_ref(), request).await?;
 
         // 流处理管道
         let mut pipeline = StreamPipeline::new(ctx.request_id);

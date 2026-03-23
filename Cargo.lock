@@ -3270,8 +3270,10 @@ name = "keycompute-provider-trait"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "bytes",
  "futures",
  "keycompute-types",
+ "reqwest",
  "serde",
  "serde_json",
 ]

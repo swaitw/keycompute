@@ -1,13 +1,15 @@
 //! HTTP 客户端
 //!
 //! 统一的 HTTP 客户端，支持代理、超时、追踪
+//!
+//! 实现 HttpTransport trait，供 Provider Adapter 使用
 
 use crate::proxy::ProxyConfig;
+use async_trait::async_trait;
 use bytes::Bytes;
-use futures::Stream;
-use reqwest::{
-    Client, ClientBuilder, Proxy, RequestBuilder, Response,
-};
+use futures::{Stream, StreamExt};
+use keycompute_provider_trait::{ByteStream, HttpTransport};
+use reqwest::{Client, ClientBuilder, Proxy, RequestBuilder, Response};
 use std::time::Duration;
 
 /// HTTP 客户端
@@ -143,6 +145,105 @@ impl HttpClient {
     /// 获取配置
     pub fn config(&self) -> &ProxyConfig {
         &self.config
+    }
+}
+
+#[async_trait]
+impl HttpTransport for HttpClient {
+    async fn post_json(
+        &self,
+        url: &str,
+        headers: Vec<(String, String)>,
+        body: String,
+    ) -> keycompute_types::Result<String> {
+        let mut request = self.client.post(url);
+
+        for (key, value) in headers {
+            request = request.header(key, value);
+        }
+
+        let response = request
+            .body(body)
+            .timeout(self.config.request_timeout)
+            .send()
+            .await
+            .map_err(|e| keycompute_types::KeyComputeError::ProviderError(format!(
+                "HTTP request failed: {}",
+                e
+            )))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let error_text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
+            return Err(keycompute_types::KeyComputeError::ProviderError(format!(
+                "HTTP error ({}): {}",
+                status, error_text
+            )));
+        }
+
+        response
+            .text()
+            .await
+            .map_err(|e| keycompute_types::KeyComputeError::ProviderError(format!(
+                "Failed to read response: {}",
+                e
+            )))
+    }
+
+    async fn post_stream(
+        &self,
+        url: &str,
+        headers: Vec<(String, String)>,
+        body: String,
+    ) -> keycompute_types::Result<ByteStream> {
+        let mut request = self.client.post(url);
+
+        for (key, value) in headers {
+            request = request.header(key, value);
+        }
+
+        let response = request
+            .body(body)
+            .timeout(self.config.stream_timeout)
+            .send()
+            .await
+            .map_err(|e| keycompute_types::KeyComputeError::ProviderError(format!(
+                "HTTP stream request failed: {}",
+                e
+            )))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let error_text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
+            return Err(keycompute_types::KeyComputeError::ProviderError(format!(
+                "HTTP error ({}): {}",
+                status, error_text
+            )));
+        }
+
+        // 转换字节流
+        let stream = response.bytes_stream().map(|result| {
+            result.map_err(|e| keycompute_types::KeyComputeError::ProviderError(format!(
+                "Stream error: {}",
+                e
+            )))
+        });
+
+        Ok(Box::pin(stream))
+    }
+
+    fn request_timeout(&self) -> Duration {
+        self.config.request_timeout
+    }
+
+    fn stream_timeout(&self) -> Duration {
+        self.config.stream_timeout
     }
 }
 

@@ -1,23 +1,25 @@
 //! OpenAI Provider Adapter 实现
 //!
 //! 实现 ProviderAdapter trait，提供 OpenAI API 的调用能力
+//!
+//! 使用统一 HTTP 传输层：
+//! - 通过 HttpTransport 发送请求
+//! - 支持连接池复用和代理出口
 
 use async_trait::async_trait;
 use futures::StreamExt;
-use keycompute_provider_trait::{ProviderAdapter, StreamBox, StreamEvent, UpstreamRequest};
+use keycompute_provider_trait::{
+    ByteStream, HttpTransport, ProviderAdapter, StreamBox, StreamEvent, UpstreamRequest,
+};
 use keycompute_types::{KeyComputeError, Result};
-use reqwest::Client;
-use std::time::Duration;
+use serde_json;
 
 use crate::protocol::{OpenAIMessage, OpenAIRequest, OpenAIResponse, StreamOptions};
 use crate::stream::parse_openai_stream;
 
 /// OpenAI Provider 适配器
 #[derive(Debug, Clone)]
-pub struct OpenAIProvider {
-    client: Client,
-    timeout: Duration,
-}
+pub struct OpenAIProvider;
 
 impl Default for OpenAIProvider {
     fn default() -> Self {
@@ -28,18 +30,7 @@ impl Default for OpenAIProvider {
 impl OpenAIProvider {
     /// 创建新的 OpenAI Provider
     pub fn new() -> Self {
-        Self {
-            client: Client::new(),
-            timeout: Duration::from_secs(120),
-        }
-    }
-
-    /// 创建带自定义超时的 Provider
-    pub fn with_timeout(timeout: Duration) -> Self {
-        Self {
-            client: Client::new(),
-            timeout,
-        }
+        Self
     }
 
     /// 构建 OpenAI 请求体
@@ -75,33 +66,23 @@ impl OpenAIProvider {
     }
 
     /// 执行非流式请求
-    async fn chat_internal(&self, request: UpstreamRequest) -> Result<String> {
+    async fn chat_internal(
+        &self,
+        transport: &dyn HttpTransport,
+        request: UpstreamRequest,
+    ) -> Result<String> {
         let body = self.build_request_body(&request);
+        let body_json = serde_json::to_string(&body)
+            .map_err(|e| KeyComputeError::ProviderError(format!("Failed to serialize request: {}", e)))?;
 
-        let response = self
-            .client
-            .post(&request.endpoint)
-            .header("Authorization", format!("Bearer {}", request.api_key))
-            .header("Content-Type", "application/json")
-            .json(&body)
-            .timeout(self.timeout)
-            .send()
-            .await
-            .map_err(|e| KeyComputeError::ProviderError(format!("Request failed: {}", e)))?;
+        let headers = vec![
+            ("Authorization".to_string(), format!("Bearer {}", request.api_key)),
+            ("Content-Type".to_string(), "application/json".to_string()),
+        ];
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let error_text = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "Unknown error".to_string());
-            return Err(KeyComputeError::ProviderError(format!(
-                "OpenAI API error ({}): {}",
-                status, error_text
-            )));
-        }
+        let response_text = transport.post_json(&request.endpoint, headers, body_json).await?;
 
-        let openai_response: OpenAIResponse = response.json().await.map_err(|e| {
+        let openai_response: OpenAIResponse = serde_json::from_str(&response_text).map_err(|e| {
             KeyComputeError::ProviderError(format!("Failed to parse response: {}", e))
         })?;
 
@@ -117,35 +98,25 @@ impl OpenAIProvider {
     }
 
     /// 执行流式请求
-    async fn stream_chat_internal(&self, request: UpstreamRequest) -> Result<StreamBox> {
+    async fn stream_chat_internal(
+        &self,
+        transport: &dyn HttpTransport,
+        request: UpstreamRequest,
+    ) -> Result<StreamBox> {
         let body = self.build_request_body(&request);
+        let body_json = serde_json::to_string(&body)
+            .map_err(|e| KeyComputeError::ProviderError(format!("Failed to serialize request: {}", e)))?;
 
-        let response = self
-            .client
-            .post(&request.endpoint)
-            .header("Authorization", format!("Bearer {}", request.api_key))
-            .header("Content-Type", "application/json")
-            .header("Accept", "text/event-stream")
-            .json(&body)
-            .timeout(self.timeout)
-            .send()
-            .await
-            .map_err(|e| KeyComputeError::ProviderError(format!("Request failed: {}", e)))?;
+        let headers = vec![
+            ("Authorization".to_string(), format!("Bearer {}", request.api_key)),
+            ("Content-Type".to_string(), "application/json".to_string()),
+            ("Accept".to_string(), "text/event-stream".to_string()),
+        ];
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let error_text = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "Unknown error".to_string());
-            return Err(KeyComputeError::ProviderError(format!(
-                "OpenAI API error ({}): {}",
-                status, error_text
-            )));
-        }
+        let byte_stream: ByteStream = transport.post_stream(&request.endpoint, headers, body_json).await?;
 
-        let stream = response.bytes_stream();
-        Ok(parse_openai_stream(stream))
+        // 转换字节流为 SSE 事件流
+        Ok(parse_openai_stream(byte_stream))
     }
 }
 
@@ -166,12 +137,16 @@ impl ProviderAdapter for OpenAIProvider {
         ]
     }
 
-    async fn stream_chat(&self, request: UpstreamRequest) -> Result<StreamBox> {
+    async fn stream_chat(
+        &self,
+        transport: &dyn HttpTransport,
+        request: UpstreamRequest,
+    ) -> Result<StreamBox> {
         if request.stream {
-            self.stream_chat_internal(request).await
+            self.stream_chat_internal(transport, request).await
         } else {
             // 非流式请求，包装为单事件流
-            let content = self.chat_internal(request).await?;
+            let content = self.chat_internal(transport, request).await?;
             let event = StreamEvent::delta(content);
 
             let stream = futures::stream::once(async move { Ok(event) }).chain(
@@ -182,8 +157,8 @@ impl ProviderAdapter for OpenAIProvider {
         }
     }
 
-    async fn chat(&self, request: UpstreamRequest) -> Result<String> {
-        self.chat_internal(request).await
+    async fn chat(&self, transport: &dyn HttpTransport, request: UpstreamRequest) -> Result<String> {
+        self.chat_internal(transport, request).await
     }
 }
 
