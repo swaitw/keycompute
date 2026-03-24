@@ -18,23 +18,8 @@ pub use state::AppState;
 use std::net::SocketAddr;
 use tracing::info;
 
-/// 服务器配置
-#[derive(Debug, Clone)]
-pub struct ServerConfig {
-    /// 监听地址
-    pub bind_addr: String,
-    /// 端口
-    pub port: u16,
-}
-
-impl Default for ServerConfig {
-    fn default() -> Self {
-        Self {
-            bind_addr: "0.0.0.0".to_string(),
-            port: 3000,
-        }
-    }
-}
+// 从 keycompute-config 导入 ServerConfig
+pub use keycompute_config::ServerConfig;
 
 /// 运行服务器
 pub async fn run(config: ServerConfig, state: AppState) -> crate::error::Result<()> {
