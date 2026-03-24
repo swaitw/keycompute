@@ -8,6 +8,11 @@
 //! 使用统一 HTTP 传输层：
 //! - 通过 HttpTransport 发送请求
 //! - 支持连接池复用和代理出口
+//!
+//! # 重要说明
+//! - `endpoint` 和 `api_key` 由调用方通过 `UpstreamRequest` 传入
+//! - 这些值通常从数据库 Account 表获取，而非配置文件
+//! - 管理员可通过前端界面动态配置，无需重启系统
 
 use async_trait::async_trait;
 use futures::StreamExt;

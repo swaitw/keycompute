@@ -1,17 +1,27 @@
 //! 统一上游请求类型
 //!
 //! 定义发送到上游 Provider 的标准化请求格式
+//!
+//! # 重要说明
+//! - `endpoint` 和 `api_key` 由调用方（如 Routing 引擎）在运行时动态传入
+//! - 这些值通常从数据库中的 Account 表获取，而非配置文件
+//! - 管理员可通过前端界面动态配置 Provider 端点和 API Key，无需重启系统
 
 use serde::{Deserialize, Serialize};
 
 /// 上游请求结构
 ///
 /// 标准化的请求格式，各 Provider Adapter 负责转换为各自协议
+///
+/// # 字段说明
+/// - `endpoint`: Provider API 端点 URL，由调用方传入（如从 Account 表获取）
+/// - `api_key`: Provider API Key，由调用方传入（如从 Account 表获取）
+/// - 这些配置**不**从配置文件读取，支持运行时动态变更
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UpstreamRequest {
-    /// 上游 API 端点
+    /// 上游 API 端点（由调用方传入，如从 Account 表获取）
     pub endpoint: String,
-    /// 上游 API Key
+    /// 上游 API Key（由调用方传入，如从 Account 表获取）
     pub api_key: String,
     /// 模型名称
     pub model: String,

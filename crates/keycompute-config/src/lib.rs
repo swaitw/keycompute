@@ -12,14 +12,12 @@ use std::path::Path;
 pub mod auth;
 pub mod database;
 pub mod gateway;
-pub mod provider;
 pub mod redis;
 pub mod server;
 
 pub use auth::AuthConfig;
 pub use database::DatabaseConfig;
 pub use gateway::{GatewayConfig, ProxyConfig};
-pub use provider::ProviderConfig;
 pub use redis::RedisConfig;
 pub use server::ServerConfig;
 
@@ -36,8 +34,6 @@ pub struct AppConfig {
     pub auth: AuthConfig,
     /// Gateway 配置
     pub gateway: GatewayConfig,
-    /// Provider 配置
-    pub provider: ProviderConfig,
 }
 
 /// 配置加载错误
@@ -165,10 +161,7 @@ impl AppConfig {
             // Gateway 重试策略默认值
             .set_default("gateway.retry.initial_backoff_ms", 100)?
             .set_default("gateway.retry.max_backoff_ms", 10000)?
-            .set_default("gateway.retry.backoff_multiplier", 2.0)?
-            // Provider 默认值
-            .set_default("provider.openai.endpoint", "https://api.openai.com/v1")?
-            .set_default("provider.deepseek.endpoint", "https://api.deepseek.com/v1")?;
+            .set_default("gateway.retry.backoff_multiplier", 2.0)?;
 
         Ok(builder)
     }
@@ -201,7 +194,6 @@ impl Default for AppConfig {
             redis: None,
             auth: AuthConfig::default(),
             gateway: GatewayConfig::default(),
-            provider: ProviderConfig::default(),
         }
     }
 }
