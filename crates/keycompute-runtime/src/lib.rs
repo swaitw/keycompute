@@ -5,6 +5,7 @@
 
 pub mod account_state;
 pub mod cooldown;
+pub mod crypto;
 pub mod provider_health;
 pub mod store;
 
@@ -13,6 +14,7 @@ pub mod redis_store;
 
 pub use account_state::{AccountState, AccountStateStore};
 pub use cooldown::{CooldownEntry, CooldownManager, CooldownReason};
+pub use crypto::{decrypt_api_key, encrypt_api_key, global_crypto, set_global_crypto, ApiKeyCrypto, CryptoError, EncryptedApiKey};
 pub use provider_health::{ProviderHealth, ProviderHealthStore};
 pub use store::RuntimeStore;
 
