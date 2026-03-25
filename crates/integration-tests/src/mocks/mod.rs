@@ -13,6 +13,9 @@ pub mod http_transport;
 /// 模拟数据库
 pub mod database;
 
+/// 模拟邮件服务
+pub mod email;
+
 /// 模拟上游 Provider 响应
 #[derive(Debug, Clone)]
 pub struct MockProviderResponse {

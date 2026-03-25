@@ -33,5 +33,6 @@ keycompute-distribution = { path = "crates/keycompute-distribution" }
 keycompute-observability = { path = "crates/keycompute-observability" }
 keycompute-server = { path = "crates/keycompute-server" }
 keycompute-config = { path = "crates/keycompute-config" }
+keycompute-emailserver = { path = "crates/keycompute-emailserver" }
 ui = { path = "packages/ui" }
 api = { path = "packages/api" }

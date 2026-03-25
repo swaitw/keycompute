@@ -3170,6 +3170,7 @@ dependencies = [
  "keycompute-claude",
  "keycompute-db",
  "keycompute-distribution",
+ "keycompute-emailserver",
  "keycompute-observability",
  "keycompute-ollama",
  "keycompute-openai",

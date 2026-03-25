@@ -268,6 +268,112 @@ impl MockDistributionRecord {
     }
 }
 
+/// 模拟用户凭证
+#[derive(Debug, Clone)]
+pub struct MockUserCredential {
+    pub id: Uuid,
+    pub user_id: Uuid,
+    pub password_hash: String,
+    pub email_verified: bool,
+    pub email_verified_at: Option<DateTime<Utc>>,
+    pub failed_login_attempts: i32,
+    pub locked_until: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+impl MockUserCredential {
+    pub fn new(user_id: Uuid, password_hash: impl Into<String>) -> Self {
+        let now = Utc::now();
+        Self {
+            id: Uuid::new_v4(),
+            user_id,
+            password_hash: password_hash.into(),
+            email_verified: false,
+            email_verified_at: None,
+            failed_login_attempts: 0,
+            locked_until: None,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    pub fn with_email_verified(mut self, verified: bool) -> Self {
+        self.email_verified = verified;
+        if verified {
+            self.email_verified_at = Some(Utc::now());
+        }
+        self
+    }
+}
+
+/// 模拟邮箱验证记录
+#[derive(Debug, Clone)]
+pub struct MockEmailVerification {
+    pub id: Uuid,
+    pub user_id: Uuid,
+    pub email: String,
+    pub token: String,
+    pub used: bool,
+    pub expires_at: DateTime<Utc>,
+    pub created_at: DateTime<Utc>,
+}
+
+impl MockEmailVerification {
+    pub fn new(user_id: Uuid, email: impl Into<String>, token: impl Into<String>) -> Self {
+        let now = Utc::now();
+        Self {
+            id: Uuid::new_v4(),
+            user_id,
+            email: email.into(),
+            token: token.into(),
+            used: false,
+            expires_at: now + chrono::Duration::hours(24),
+            created_at: now,
+        }
+    }
+
+    pub fn is_valid(&self) -> bool {
+        !self.used && self.expires_at > Utc::now()
+    }
+}
+
+/// 模拟密码重置记录
+#[derive(Debug, Clone)]
+pub struct MockPasswordReset {
+    pub id: Uuid,
+    pub user_id: Uuid,
+    pub token: String,
+    pub used: bool,
+    pub expires_at: DateTime<Utc>,
+    pub requested_from_ip: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+impl MockPasswordReset {
+    pub fn new(user_id: Uuid, token: impl Into<String>) -> Self {
+        let now = Utc::now();
+        Self {
+            id: Uuid::new_v4(),
+            user_id,
+            token: token.into(),
+            used: false,
+            expires_at: now + chrono::Duration::hours(1),
+            requested_from_ip: None,
+            created_at: now,
+        }
+    }
+
+    pub fn is_valid(&self) -> bool {
+        !self.used && self.expires_at > Utc::now()
+    }
+
+    pub fn with_ip(mut self, ip: impl Into<String>) -> Self {
+        self.requested_from_ip = Some(ip.into());
+        self
+    }
+}
+
 /// 内存数据库模拟
 #[derive(Debug, Default)]
 pub struct MockDatabase {
