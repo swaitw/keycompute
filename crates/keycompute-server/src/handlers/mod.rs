@@ -5,10 +5,8 @@
 pub mod admin;
 pub mod auth;
 pub mod billing;
-pub mod chat;
 pub mod gateway;
 pub mod health;
-pub mod models;
 pub mod openai;
 pub mod pricing;
 pub mod routing;
@@ -21,15 +19,11 @@ pub use auth::{
     verify_reset_token_handler,
 };
 
-// OpenAI 兼容 API (新的统一入口)
+// OpenAI 兼容 API (统一入口)
 pub use openai::{
     ChatCompletionChunk, ChatCompletionRequest, ChatCompletionResponse, ListModelsResponse, Model,
     chat_completions, list_models, retrieve_model,
 };
-
-// 向后兼容：保留旧的导出
-pub use chat::chat_completions as chat_completions_legacy;
-pub use models::list_models as list_models_legacy;
 
 // 用户自服务
 pub use user::{
