@@ -182,6 +182,7 @@ impl AppState {
                     Arc::new(keycompute_deepseek::DeepSeekProvider::new()),
                 )
                 .add_provider("vllm", Arc::new(keycompute_vllm::VllmProvider::new()))
+                .add_provider("claude", Arc::new(keycompute_claude::ClaudeProvider::new()))
                 .with_http_proxy(Arc::clone(&http_proxy))
                 .build(),
         );
@@ -310,6 +311,7 @@ impl AppState {
                     Arc::new(keycompute_deepseek::DeepSeekProvider::new()),
                 )
                 .add_provider("vllm", Arc::new(keycompute_vllm::VllmProvider::new()))
+                .add_provider("claude", Arc::new(keycompute_claude::ClaudeProvider::new()))
                 .with_http_proxy(Arc::clone(&http_proxy))
                 .build(),
         );

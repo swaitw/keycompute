@@ -3,6 +3,7 @@
 //! 验证各 Provider 适配器的协议转换和流处理
 
 use integration_tests::common::VerificationChain;
+use keycompute_claude::ClaudeProvider;
 use keycompute_openai::OpenAIProvider;
 use keycompute_provider_trait::{ProviderAdapter, StreamEvent, UpstreamRequest};
 
@@ -184,6 +185,78 @@ fn test_provider_upstream_message() {
         "UpstreamMessage::assistant",
         format!("Role: {}", assistant.role),
         assistant.role == "assistant",
+    );
+
+    chain.print_report();
+    assert!(chain.all_passed());
+}
+
+/// 测试 Claude Provider
+#[test]
+fn test_provider_claude() {
+    let mut chain = VerificationChain::new();
+
+    // 1. 创建 Claude Provider
+    let provider = ClaudeProvider::new();
+    chain.add_step(
+        "keycompute-claude",
+        "ClaudeProvider::new",
+        "Claude provider created",
+        true,
+    );
+
+    // 2. 检查名称
+    let name = provider.name();
+    chain.add_step(
+        "keycompute-claude",
+        "ClaudeProvider::name",
+        format!("Provider name: {}", name),
+        name == "claude",
+    );
+
+    // 3. 检查支持的模型
+    let models = provider.supported_models();
+    chain.add_step(
+        "keycompute-claude",
+        "ClaudeProvider::supported_models",
+        format!("Supported models count: {}", models.len()),
+        !models.is_empty(),
+    );
+
+    // 4. 检查 Claude 3.5 Sonnet 支持
+    let supports_sonnet = provider.supports_model("claude-3-5-sonnet-20241022");
+    chain.add_step(
+        "keycompute-claude",
+        "ClaudeProvider::supports_model_sonnet",
+        format!("Supports claude-3-5-sonnet-20241022: {}", supports_sonnet),
+        supports_sonnet,
+    );
+
+    // 5. 检查 Claude 3 Opus 支持
+    let supports_opus = provider.supports_model("claude-3-opus-20240229");
+    chain.add_step(
+        "keycompute-claude",
+        "ClaudeProvider::supports_model_opus",
+        format!("Supports claude-3-opus-20240229: {}", supports_opus),
+        supports_opus,
+    );
+
+    // 6. 检查不支持的模型
+    let supports_unknown = provider.supports_model("gpt-4o");
+    chain.add_step(
+        "keycompute-claude",
+        "ClaudeProvider::supports_model_unknown",
+        format!("Supports gpt-4o: {}", supports_unknown),
+        !supports_unknown,
+    );
+
+    // 7. 检查短名称支持（兼容形式）
+    let supports_short_name = provider.supports_model("claude-3-5-sonnet");
+    chain.add_step(
+        "keycompute-claude",
+        "ClaudeProvider::supports_model_short_name",
+        format!("Supports claude-3-5-sonnet: {}", supports_short_name),
+        supports_short_name,
     );
 
     chain.print_report();
