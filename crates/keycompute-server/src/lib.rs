@@ -13,7 +13,7 @@ pub mod state;
 pub use error::{ApiError, Result};
 pub use extractors::AuthExtractor;
 pub use router::create_router;
-pub use state::{AppState, init_global_crypto};
+pub use state::{AppState, AppStateConfig, init_global_crypto};
 
 use std::net::SocketAddr;
 use tracing::info;
