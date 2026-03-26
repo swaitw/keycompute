@@ -408,24 +408,33 @@ pub async fn list_accounts(
 
     let accounts: Vec<AccountInfo> = db_accounts
         .into_iter()
-        .map(|acc| AccountInfo {
-            id: acc.id,
-            name: acc.name,
-            provider: acc.provider,
-            api_key_preview: acc.upstream_api_key_preview,
-            base_url: if acc.endpoint.is_empty() {
-                None
-            } else {
-                Some(acc.endpoint)
-            },
-            models: acc.models_supported,
-            rpm_limit: acc.rpm_limit,
-            current_rpm: 0, // TODO: 从 account_states 获取实时 RPM
-            is_active: acc.enabled,
-            is_healthy: true, // TODO: 从 provider_health 获取健康状态
-            priority: acc.priority,
-            created_at: acc.created_at.to_rfc3339(),
-            last_used_at: acc.updated_at.to_rfc3339().into(),
+        .map(|acc| {
+            // 从 ProviderHealthStore 获取真实健康状态
+            let is_healthy = state.provider_health.is_healthy(&acc.provider);
+
+            // 从 AccountStateStore 获取实时 RPM
+            let account_state = state.account_states.get(&acc.id);
+            let current_rpm = account_state.current_rpm as i32;
+
+            AccountInfo {
+                id: acc.id,
+                name: acc.name,
+                provider: acc.provider,
+                api_key_preview: acc.upstream_api_key_preview,
+                base_url: if acc.endpoint.is_empty() {
+                    None
+                } else {
+                    Some(acc.endpoint)
+                },
+                models: acc.models_supported,
+                rpm_limit: acc.rpm_limit,
+                current_rpm,
+                is_active: acc.enabled,
+                is_healthy,
+                priority: acc.priority,
+                created_at: acc.created_at.to_rfc3339(),
+                last_used_at: acc.updated_at.to_rfc3339().into(),
+            }
         })
         .collect();
 
