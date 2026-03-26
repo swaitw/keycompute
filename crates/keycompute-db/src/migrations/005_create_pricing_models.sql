@@ -15,7 +15,7 @@ CREATE TABLE pricing_models (
     UNIQUE(tenant_id, model_name, provider, effective_from)
 );
 
-CREATE INDEX idx_pricing_models_tenant ON pricing_models(tenant_id);
+CREATE INDEX idx_pricing_models_tenant_id ON pricing_models(tenant_id);
 CREATE INDEX idx_pricing_models_model ON pricing_models(model_name);
 CREATE INDEX idx_pricing_models_provider ON pricing_models(provider);
 CREATE INDEX idx_pricing_models_default ON pricing_models(is_default) WHERE is_default = TRUE;

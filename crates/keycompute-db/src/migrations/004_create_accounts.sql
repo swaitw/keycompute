@@ -16,6 +16,6 @@ CREATE TABLE accounts (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX idx_accounts_tenant ON accounts(tenant_id);
+CREATE INDEX idx_accounts_tenant_id ON accounts(tenant_id);
 CREATE INDEX idx_accounts_provider ON accounts(provider);
 CREATE INDEX idx_accounts_enabled ON accounts(enabled) WHERE enabled = TRUE;

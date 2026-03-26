@@ -24,11 +24,11 @@ CREATE TABLE IF NOT EXISTS payment_orders (
     -- 商品描述
     body TEXT,
     -- 支付时间
-    paid_at TIMESTAMP WITH TIME ZONE,
+    paid_at TIMESTAMPTZ,
     -- 关闭时间
-    closed_at TIMESTAMP WITH TIME ZONE,
+    closed_at TIMESTAMPTZ,
     -- 过期时间
-    expired_at TIMESTAMP WITH TIME ZONE NOT NULL,
+    expired_at TIMESTAMPTZ NOT NULL,
     -- 支付URL（用于前端跳转）
     pay_url TEXT,
     -- 回调通知原始数据
@@ -36,9 +36,9 @@ CREATE TABLE IF NOT EXISTS payment_orders (
     -- 备注信息
     remarks TEXT,
     -- 创建时间
-    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     -- 更新时间
-    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 -- 创建索引
@@ -77,17 +77,17 @@ CREATE TABLE IF NOT EXISTS user_balances (
     -- 用户ID
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE UNIQUE,
     -- 可用余额（单位：元）
-    available_balance DECIMAL(12, 4) NOT NULL DEFAULT 0,
+    available_balance DECIMAL(12, 2) NOT NULL DEFAULT 0,
     -- 冻结余额（单位：元）
-    frozen_balance DECIMAL(12, 4) NOT NULL DEFAULT 0,
+    frozen_balance DECIMAL(12, 2) NOT NULL DEFAULT 0,
     -- 累计充值金额
-    total_recharged DECIMAL(12, 4) NOT NULL DEFAULT 0,
+    total_recharged DECIMAL(12, 2) NOT NULL DEFAULT 0,
     -- 累计消费金额
-    total_consumed DECIMAL(12, 4) NOT NULL DEFAULT 0,
+    total_consumed DECIMAL(12, 2) NOT NULL DEFAULT 0,
     -- 创建时间
-    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     -- 更新时间
-    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 -- 创建索引
@@ -115,17 +115,17 @@ CREATE TABLE IF NOT EXISTS balance_transactions (
     -- 交易类型: recharge/consume/refund/freeze/unfreeze
     transaction_type VARCHAR(20) NOT NULL,
     -- 变动金额（正数为增加，负数为减少）
-    amount DECIMAL(12, 4) NOT NULL,
+    amount DECIMAL(12, 2) NOT NULL,
     -- 变动前余额
-    balance_before DECIMAL(12, 4) NOT NULL,
+    balance_before DECIMAL(12, 2) NOT NULL,
     -- 变动后余额
-    balance_after DECIMAL(12, 4) NOT NULL,
+    balance_after DECIMAL(12, 2) NOT NULL,
     -- 币种
     currency VARCHAR(8) NOT NULL DEFAULT 'CNY',
     -- 备注
     description TEXT,
     -- 创建时间
-    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 -- 创建索引
