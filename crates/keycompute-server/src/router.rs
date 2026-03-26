@@ -86,7 +86,10 @@ use crate::{
         verify_email_handler,
         verify_reset_token_handler,
     },
-    middleware::{cors_layer, rate_limit_middleware, request_logger, trace_id_middleware},
+    middleware::{
+        admin_auth_middleware, cors_layer, rate_limit_middleware, request_logger,
+        trace_id_middleware,
+    },
     state::AppState,
 };
 use axum::{
@@ -209,14 +212,19 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/v1/pricing/batch-defaults", post(set_default_pricing))
         .route("/api/v1/pricing/calculate", post(calculate_cost));
 
-    // 合并管理路由并添加限流
+    // 合并管理路由并添加认证和限流中间件
+    // 注意：中间件执行顺序是反向的，所以先添加 rate_limit，再添加 admin_auth
+    // 实际执行顺序：admin_auth_middleware -> rate_limit_middleware -> handler
     let admin_routes = admin_user_routes
         .merge(admin_account_routes)
         .merge(admin_tenant_routes)
         .merge(admin_settings_routes)
         .merge(admin_distribution_routes)
         .merge(admin_pricing_routes)
-        .layer(from_fn_with_state(state.clone(), rate_limit_middleware));
+        // 先添加限流层（后执行）
+        .layer(from_fn_with_state(state.clone(), rate_limit_middleware))
+        // 再添加 Admin 认证层（先执行），统一保护所有 Admin 路由
+        .layer(from_fn_with_state(state.clone(), admin_auth_middleware));
 
     // ==================== 5. 定价和账单 API ====================
     let billing_routes = Router::new()

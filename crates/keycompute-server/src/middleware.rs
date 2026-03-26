@@ -16,7 +16,8 @@ use axum::{
 use keycompute_auth::Permission;
 use keycompute_ratelimit::RateLimitKey;
 use std::time::Instant;
-use tracing::{error, info};
+use tracing::{error, info, warn};
+use uuid::Uuid;
 
 /// 请求日志中间件
 pub async fn request_logger(req: Request, next: Next) -> Response {
@@ -203,14 +204,177 @@ pub fn permission_middleware(
     }
 }
 
+// ==================== Admin 认证中间件 ====================
+
+/// Admin 认证中间件
+///
+/// 专为 Admin 路由设计，提供统一的权限保护：
+/// 1. 验证请求是否携带有效的认证 Token
+/// 2. 检查用户是否具有 Admin 角色
+/// 3. 将认证信息注入请求扩展，供后续 Handler 使用
+///
+/// # 返回
+/// - 成功：继续处理请求
+/// - 401：未认证或认证失败
+/// - 403：认证成功但非 Admin 角色
+///
+/// # 使用示例
+/// ```rust,ignore
+/// let admin_routes = Router::new()
+///     .route("/api/v1/users", get(list_all_users))
+///     .layer(from_fn_with_state(state.clone(), admin_auth_middleware));
+/// ```
+pub async fn admin_auth_middleware(
+    State(state): State<AppState>,
+    mut req: Request,
+    next: Next,
+) -> Response {
+    // 1. 从请求头提取认证信息
+    let headers = req.headers();
+    let auth_header = match headers.get("Authorization").and_then(|h| h.to_str().ok()) {
+        Some(h) => h,
+        None => {
+            warn!("Admin route accessed without authentication");
+            return (
+                StatusCode::UNAUTHORIZED,
+                serde_json::json!({
+                    "error": {
+                        "message": "Authentication required",
+                        "type": "auth_required",
+                        "code": "unauthorized"
+                    }
+                })
+                .to_string(),
+            )
+                .into_response();
+        }
+    };
+
+    // 2. 解析 Bearer token
+    let token = match auth_header.strip_prefix("Bearer ") {
+        Some(t) => t,
+        None => {
+            warn!("Invalid authorization header format");
+            return (
+                StatusCode::UNAUTHORIZED,
+                serde_json::json!({
+                    "error": {
+                        "message": "Invalid authorization format. Expected: Bearer <token>",
+                        "type": "auth_invalid_format",
+                        "code": "unauthorized"
+                    }
+                })
+                .to_string(),
+            )
+                .into_response();
+        }
+    };
+
+    // 3. 验证 token 并获取认证上下文
+    let auth_context = match state.auth.verify_api_key(token).await {
+        Ok(ctx) => ctx,
+        Err(e) => {
+            warn!(error = %e, "Authentication failed for admin route");
+            return (
+                StatusCode::UNAUTHORIZED,
+                serde_json::json!({
+                    "error": {
+                        "message": format!("Authentication failed: {}", e),
+                        "type": "auth_failed",
+                        "code": "unauthorized"
+                    }
+                })
+                .to_string(),
+            )
+                .into_response();
+        }
+    };
+
+    // 4. 检查 Admin 角色
+    if auth_context.role != "admin" {
+        warn!(
+            user_id = %auth_context.user_id,
+            role = %auth_context.role,
+            "Non-admin user attempted to access admin route"
+        );
+        return (
+            StatusCode::FORBIDDEN,
+            serde_json::json!({
+                "error": {
+                    "message": "Admin permission required",
+                    "type": "permission_denied",
+                    "code": "forbidden"
+                }
+            })
+            .to_string(),
+        )
+            .into_response();
+    }
+
+    // 5. 认证成功，注入认证信息到请求扩展
+    // 创建 AuthExtractor 并存入请求扩展，供后续 Handler 使用
+    let auth_extractor = AuthExtractor::from_auth_context(auth_context);
+    req.extensions_mut().insert(auth_extractor);
+
+    // 6. 继续处理请求
+    info!("Admin authentication successful");
+    next.run(req).await
+}
+
+/// 从请求扩展中提取 AuthExtractor
+///
+/// 用于在 Handler 中获取已由中间件验证的认证信息
+///
+/// # 使用示例
+/// ```rust,ignore
+/// pub async fn admin_handler(
+///     Extension(auth): Extension<AuthExtractor>,
+/// ) -> Result<Json<...>> {
+///     // auth 已由 admin_auth_middleware 验证
+///     Ok(Json(...))
+/// }
+/// ```
+pub fn extract_auth_from_extensions(req: &Request) -> Option<AuthExtractor> {
+    req.extensions().get::<AuthExtractor>().cloned()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::body::Body;
+    use axum::http::Request;
 
     #[tokio::test]
     async fn test_cors_layer() {
         let cors = cors_layer();
         // 确保可以创建 CORS 层
         let _ = cors;
+    }
+
+    #[test]
+    fn test_permission_middleware_creation() {
+        // 测试权限中间件可以正确创建
+        let _middleware = permission_middleware(Permission::SystemAdmin);
+    }
+
+    #[test]
+    fn test_extract_auth_from_extensions_empty() {
+        // 测试从空扩展中提取 AuthExtractor
+        let req: Request<Body> = Request::new(Body::empty());
+        let result = extract_auth_from_extensions(&req);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_extract_auth_from_extensions_present() {
+        // 测试从扩展中提取已注入的 AuthExtractor
+        let mut req: Request<Body> = Request::new(Body::empty());
+        let auth = AuthExtractor::new(Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4(), "admin");
+        req.extensions_mut().insert(auth.clone());
+
+        let result = extract_auth_from_extensions(&req);
+        assert!(result.is_some());
+        let extracted = result.unwrap();
+        assert!(extracted.is_admin());
     }
 }
