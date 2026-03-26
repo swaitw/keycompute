@@ -14,7 +14,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use keycompute_auth::Permission;
-use keycompute_ratelimit::RateLimitKey;
+use keycompute_ratelimit::{RateLimitConfig, RateLimitKey};
 use std::time::Instant;
 use tracing::{error, info, warn};
 use uuid::Uuid;
@@ -79,6 +79,7 @@ pub async fn trace_id_middleware(mut req: Request, next: Next) -> Response {
 /// 限流中间件
 ///
 /// 基于用户/租户/API Key 进行请求限流
+/// 支持从数据库加载租户特定的 RPM/TPM 配置
 /// 注意：此中间件应在认证中间件之后运行，以获取真实的认证信息
 pub async fn rate_limit_middleware(
     State(state): State<AppState>,
@@ -100,13 +101,16 @@ pub async fn rate_limit_middleware(
     };
 
     // 使用 AuthService 验证 token 获取真实的用户信息
-    let rate_key = match state.auth.verify_api_key(token).await {
+    let (rate_key, tenant_id) = match state.auth.verify_api_key(token).await {
         Ok(auth_context) => {
             // 使用真实的 user_id, tenant_id, produce_ai_key_id 创建限流键
-            RateLimitKey::new(
+            (
+                RateLimitKey::new(
+                    auth_context.tenant_id,
+                    auth_context.user_id,
+                    auth_context.produce_ai_key_id,
+                ),
                 auth_context.tenant_id,
-                auth_context.user_id,
-                auth_context.produce_ai_key_id,
             )
         }
         Err(_) => {
@@ -115,8 +119,38 @@ pub async fn rate_limit_middleware(
         }
     };
 
-    // 检查限流
-    match state.rate_limiter.check_and_record(&rate_key).await {
+    // 从数据库加载租户特定的限流配置
+    let rate_limit_config = if let Some(pool) = &state.pool {
+        match keycompute_db::Tenant::find_by_id(pool, tenant_id).await {
+            Ok(Some(tenant)) => {
+                RateLimitConfig::from_tenant(tenant.default_rpm_limit, tenant.default_tpm_limit)
+            }
+            Ok(None) => {
+                tracing::warn!(
+                    tenant_id = %tenant_id,
+                    "Tenant not found for rate limiting, using default config"
+                );
+                RateLimitConfig::default()
+            }
+            Err(e) => {
+                tracing::warn!(
+                    tenant_id = %tenant_id,
+                    error = %e,
+                    "Failed to load tenant for rate limiting, using default config"
+                );
+                RateLimitConfig::default()
+            }
+        }
+    } else {
+        RateLimitConfig::default()
+    };
+
+    // 检查限流（使用租户特定配置）
+    match state
+        .rate_limiter
+        .check_and_record_with_config(&rate_key, &rate_limit_config)
+        .await
+    {
         Ok(()) => {
             // 限流检查通过，继续处理请求
             next.run(req).await
@@ -124,8 +158,10 @@ pub async fn rate_limit_middleware(
         Err(keycompute_types::KeyComputeError::RateLimitExceeded) => {
             // 触发限流
             info!(
-                "Rate limit exceeded for tenant: {}, user: {}",
-                rate_key.tenant_id, rate_key.user_id
+                tenant_id = %rate_key.tenant_id,
+                user_id = %rate_key.user_id,
+                rpm_limit = rate_limit_config.rpm_limit,
+                "Rate limit exceeded"
             );
             (
                 StatusCode::TOO_MANY_REQUESTS,

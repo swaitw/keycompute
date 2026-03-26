@@ -15,7 +15,6 @@ use axum::{
 };
 use futures::stream::Stream;
 use keycompute_db::models::account::Account;
-use keycompute_ratelimit::{RateLimitConfig, RateLimitKey};
 use keycompute_types::{Message, RequestContext, UsageAccumulator};
 use serde::{Deserialize, Serialize};
 use std::convert::Infallible;
@@ -289,69 +288,15 @@ pub struct ChatCompletionChunkDelta {
 
 /// Chat Completions 处理器
 /// POST /v1/chat/completions
+///
+/// 注意：限流已在中间件层统一处理，此处直接开始业务逻辑
 pub async fn chat_completions(
     State(state): State<AppState>,
     auth: AuthExtractor,
     request_id: RequestId,
     Json(request): Json<ChatCompletionRequest>,
 ) -> Result<Sse<impl Stream<Item = std::result::Result<Event, Infallible>>>> {
-    // 1. 配额控制 - 创建限流键并检查
-    let rate_limit_key = RateLimitKey::new(auth.tenant_id, auth.user_id, auth.produce_ai_key_id);
-
-    // 尝试从数据库加载租户配额配置
-    let rate_limit_config = if let Some(pool) = &state.pool {
-        match keycompute_db::Tenant::find_by_id(pool, auth.tenant_id).await {
-            Ok(Some(tenant)) => {
-                RateLimitConfig::from_tenant(tenant.default_rpm_limit, tenant.default_tpm_limit)
-            }
-            Ok(None) => {
-                tracing::warn!(
-                    tenant_id = %auth.tenant_id,
-                    "Tenant not found for rate limiting, using default config"
-                );
-                RateLimitConfig::default()
-            }
-            Err(e) => {
-                tracing::warn!(
-                    tenant_id = %auth.tenant_id,
-                    error = %e,
-                    "Failed to load tenant for rate limiting, using default config"
-                );
-                RateLimitConfig::default()
-            }
-        }
-    } else {
-        RateLimitConfig::default()
-    };
-
-    // 检查并记录请求配额
-    state
-        .rate_limiter
-        .check_and_record_with_config(&rate_limit_key, &rate_limit_config)
-        .await
-        .map_err(|e| {
-            tracing::warn!(
-                tenant_id = %auth.tenant_id,
-                user_id = %auth.user_id,
-                rpm_limit = rate_limit_config.rpm_limit,
-                error = %e,
-                "Rate limit exceeded"
-            );
-            ApiError::RateLimit(format!(
-                "Rate limit exceeded. RPM limit: {}",
-                rate_limit_config.rpm_limit
-            ))
-        })?;
-
-    tracing::debug!(
-        tenant_id = %auth.tenant_id,
-        user_id = %auth.user_id,
-        rpm_limit = rate_limit_config.rpm_limit,
-        tpm_limit = rate_limit_config.tpm_limit,
-        "Rate limit check passed"
-    );
-
-    // 2. 构建 PricingSnapshot
+    // 1. 构建 PricingSnapshot
     let pricing = state
         .pricing
         .create_snapshot(&request.model, &auth.tenant_id)
