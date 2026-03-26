@@ -2,5 +2,59 @@
 name = "keycompute-alipay"
 version = "0.1.0"
 edition = "2024"
+description = "KeyCompute 支付宝支付模块"
+license = "MIT"
+repository = "https://github.com/keycompute/keycompute"
+keywords = ["alipay", "payment", "keycompute"]
+categories = ["finance", "api-bindings"]
 
 [dependencies]
+# 异步运行时
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+
+# HTTP客户端
+reqwest = { version = "0.12", features = ["json"] }
+
+# 序列化
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# 加密和签名
+rsa = { version = "0.9", features = ["pem"] }
+sha2 = "0.10"
+base64 = "0.22"
+
+# 时间处理
+chrono = { version = "0.4", features = ["serde"] }
+
+# UUID
+uuid = { version = "1", features = ["v4", "serde"] }
+
+# Decimal处理
+rust_decimal = { version = "1", features = ["serde-str"] }
+
+# 数据库
+sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "uuid", "chrono", "json", "rust_decimal"] }
+
+# 错误处理
+thiserror = "2"
+
+# 日志
+tracing = "0.1"
+
+# 内部依赖
+keycompute-db = { path = "../../keycompute-db" }
+
+# 随机数
+rand = "0.8"
+
+# URL编码
+percent-encoding = "2"
+
+[dev-dependencies]
+tokio-test = "0.4"
+
+[features]
+default = []
+# 沙箱模式（用于测试）
+sandbox = []

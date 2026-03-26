@@ -34,5 +34,6 @@ keycompute-observability = { path = "crates/keycompute-observability" }
 keycompute-server = { path = "crates/keycompute-server" }
 keycompute-config = { path = "crates/keycompute-config" }
 keycompute-emailserver = { path = "crates/keycompute-emailserver" }
+keycompute-alipay = { path = "crates/keycompute-payment/keycompute-alipay" }
 ui = { path = "packages/ui" }
 api = { path = "packages/api" }

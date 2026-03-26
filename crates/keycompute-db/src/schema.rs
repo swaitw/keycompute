@@ -1,5 +1,5 @@
 //! 数据库表结构定义
-//!
+//
 //! 本模块提供表名和列名的常量定义，用于构建类型安全的查询
 
 /// 表名常量
@@ -12,6 +12,9 @@ pub mod tables {
     pub const USAGE_LOGS: &str = "usage_logs";
     pub const DISTRIBUTION_RECORDS: &str = "distribution_records";
     pub const TENANT_DISTRIBUTION_RULES: &str = "tenant_distribution_rules";
+    pub const PAYMENT_ORDERS: &str = "payment_orders";
+    pub const USER_BALANCES: &str = "user_balances";
+    pub const BALANCE_TRANSACTIONS: &str = "balance_transactions";
 }
 
 /// users 表列名
@@ -135,4 +138,56 @@ pub mod tenant_distribution_rules {
     pub const EFFECTIVE_UNTIL: &str = "effective_until";
     pub const CREATED_AT: &str = "created_at";
     pub const UPDATED_AT: &str = "updated_at";
+}
+
+/// payment_orders 表列名
+pub mod payment_orders {
+    pub const ID: &str = "id";
+    pub const TENANT_ID: &str = "tenant_id";
+    pub const USER_ID: &str = "user_id";
+    pub const OUT_TRADE_NO: &str = "out_trade_no";
+    pub const TRADE_NO: &str = "trade_no";
+    pub const AMOUNT: &str = "amount";
+    pub const CURRENCY: &str = "currency";
+    pub const STATUS: &str = "status";
+    pub const PAYMENT_METHOD: &str = "payment_method";
+    pub const SUBJECT: &str = "subject";
+    pub const BODY: &str = "body";
+    pub const PAID_AT: &str = "paid_at";
+    pub const CLOSED_AT: &str = "closed_at";
+    pub const EXPIRED_AT: &str = "expired_at";
+    pub const PAY_URL: &str = "pay_url";
+    pub const NOTIFY_DATA: &str = "notify_data";
+    pub const REMARKS: &str = "remarks";
+    pub const CREATED_AT: &str = "created_at";
+    pub const UPDATED_AT: &str = "updated_at";
+}
+
+/// user_balances 表列名
+pub mod user_balances {
+    pub const ID: &str = "id";
+    pub const TENANT_ID: &str = "tenant_id";
+    pub const USER_ID: &str = "user_id";
+    pub const AVAILABLE_BALANCE: &str = "available_balance";
+    pub const FROZEN_BALANCE: &str = "frozen_balance";
+    pub const TOTAL_RECHARGED: &str = "total_recharged";
+    pub const TOTAL_CONSUMED: &str = "total_consumed";
+    pub const CREATED_AT: &str = "created_at";
+    pub const UPDATED_AT: &str = "updated_at";
+}
+
+/// balance_transactions 表列名
+pub mod balance_transactions {
+    pub const ID: &str = "id";
+    pub const TENANT_ID: &str = "tenant_id";
+    pub const USER_ID: &str = "user_id";
+    pub const ORDER_ID: &str = "order_id";
+    pub const USAGE_LOG_ID: &str = "usage_log_id";
+    pub const TRANSACTION_TYPE: &str = "transaction_type";
+    pub const AMOUNT: &str = "amount";
+    pub const BALANCE_BEFORE: &str = "balance_before";
+    pub const BALANCE_AFTER: &str = "balance_after";
+    pub const CURRENCY: &str = "currency";
+    pub const DESCRIPTION: &str = "description";
+    pub const CREATED_AT: &str = "created_at";
 }

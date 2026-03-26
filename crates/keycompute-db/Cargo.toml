@@ -5,12 +5,14 @@ edition = "2024"
 
 [dependencies]
 keycompute-types.workspace = true
-sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "uuid", "chrono", "bigdecimal", "migrate"] }
+sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "uuid", "chrono", "bigdecimal", "migrate", "json", "rust_decimal"] }
 tokio = { version = "1.44", features = ["full"] }
 uuid = { version = "1.16", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 bigdecimal = { version = "0.4", features = ["serde"] }
 serde = { version = "1.0", features = ["derive"] }
+serde_json = "1"
 thiserror = "2.0"
 once_cell = "1.21"
 tracing = "0.1"
+rust_decimal = { version = "1", features = ["serde-str"] }
