@@ -1,5 +1,5 @@
 //! 处理器模块
-//!
+//
 //! 处理各种 HTTP 请求
 
 pub mod admin;
@@ -9,6 +9,7 @@ pub mod distribution;
 pub mod gateway;
 pub mod health;
 pub mod openai;
+pub mod payment;
 pub mod pricing;
 pub mod routing;
 pub mod user;
@@ -56,3 +57,9 @@ pub use routing::{debug_routing, get_provider_health};
 
 // 健康检查
 pub use health::health_check;
+
+// 支付相关
+pub use payment::{
+    admin_list_payment_orders, alipay_notify, create_payment_order, get_my_balance,
+    get_payment_order, list_my_payment_orders, sync_payment_order,
+};

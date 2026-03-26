@@ -16,6 +16,7 @@ keycompute-distribution = { workspace = true }
 keycompute-observability = { workspace = true }
 keycompute-config = { workspace = true }
 keycompute-emailserver = { path = "../keycompute-emailserver" }
+keycompute-alipay = { path = "../keycompute-payment/keycompute-alipay" }
 llm-gateway = { workspace = true }
 keycompute-provider-trait = { workspace = true }
 keycompute-openai = { workspace = true }
@@ -40,6 +41,7 @@ tokio-stream = "0.1"
 async-trait = "0.1"
 async-stream = "0.3"
 anyhow = "1.0"
+percent-encoding = "2"
 
 [features]
 default = []

@@ -29,6 +29,8 @@ pub enum ApiError {
     BadRequest(String),
     /// 资源未找到
     NotFound(String),
+    /// 权限拒绝
+    Forbidden(String),
 }
 
 impl fmt::Display for ApiError {
@@ -42,6 +44,7 @@ impl fmt::Display for ApiError {
             ApiError::Internal(msg) => write!(f, "Internal error: {}", msg),
             ApiError::BadRequest(msg) => write!(f, "Bad request: {}", msg),
             ApiError::NotFound(msg) => write!(f, "Not found: {}", msg),
+            ApiError::Forbidden(msg) => write!(f, "Forbidden: {}", msg),
         }
     }
 }
@@ -59,6 +62,7 @@ impl IntoResponse for ApiError {
             ApiError::Internal(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg.clone()),
             ApiError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg.clone()),
             ApiError::NotFound(msg) => (StatusCode::NOT_FOUND, msg.clone()),
+            ApiError::Forbidden(msg) => (StatusCode::FORBIDDEN, msg.clone()),
         };
 
         let body = Json(json!({
@@ -83,6 +87,7 @@ fn error_type(error: &ApiError) -> &'static str {
         ApiError::Internal(_) => "internal_error",
         ApiError::BadRequest(_) => "bad_request_error",
         ApiError::NotFound(_) => "not_found_error",
+        ApiError::Forbidden(_) => "forbidden_error",
     }
 }
 

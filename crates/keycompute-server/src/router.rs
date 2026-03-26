@@ -9,6 +9,9 @@
 
 use crate::{
     handlers::{
+        // 支付相关
+        admin_list_payment_orders,
+        alipay_notify,
         calculate_cost,
         change_password,
         // OpenAI 兼容 API
@@ -17,6 +20,7 @@ use crate::{
         create_account,
         create_api_key,
         create_distribution_rule,
+        create_payment_order,
         // 调试接口
         debug_routing,
         delete_account,
@@ -34,11 +38,13 @@ use crate::{
         get_distribution_stats,
         get_execution_stats,
         get_gateway_status,
+        get_my_balance,
         get_my_distribution_earnings,
         get_my_referral_code,
         get_my_referrals,
         get_my_usage,
         get_my_usage_stats,
+        get_payment_order,
         // 定价和账单
         get_pricing,
         get_provider_health,
@@ -55,6 +61,7 @@ use crate::{
         list_distribution_rules,
         list_models,
         list_my_api_keys,
+        list_my_payment_orders,
         list_tenants,
         login_handler,
         refresh_account,
@@ -63,6 +70,7 @@ use crate::{
         resend_verification_handler,
         reset_password_handler,
         retrieve_model,
+        sync_payment_order,
         test_account,
         update_account,
         update_distribution_rule,
@@ -213,7 +221,38 @@ pub fn create_router(state: AppState) -> Router {
         .route("/debug/gateway/health", post(check_provider_health))
         .layer(from_fn_with_state(state.clone(), rate_limit_middleware));
 
-    // ==================== 7. 健康检查（公开） ====================
+    // ==================== 7. 支付 API ====================
+    // 用户支付路由（需要认证 + 限流）
+    let payment_routes = Router::new()
+        // 创建支付订单（支持跳转支付和扫码支付）
+        .route(
+            "/api/v1/payments/orders",
+            post(create_payment_order).get(list_my_payment_orders),
+        )
+        // 获取订单详情
+        .route("/api/v1/payments/orders/{id}", get(get_payment_order))
+        // 同步订单状态
+        .route(
+            "/api/v1/payments/sync/{out_trade_no}",
+            post(sync_payment_order),
+        )
+        // 获取我的余额
+        .route("/api/v1/payments/balance", get(get_my_balance))
+        .layer(from_fn_with_state(state.clone(), rate_limit_middleware));
+
+    // 支付宝异步通知（不需要认证）
+    let payment_notify_routes =
+        Router::new().route("/api/v1/payments/notify/alipay", post(alipay_notify));
+
+    // 管理员支付路由
+    let admin_payment_routes = Router::new()
+        .route(
+            "/api/v1/admin/payments/orders",
+            get(admin_list_payment_orders),
+        )
+        .layer(from_fn_with_state(state.clone(), rate_limit_middleware));
+
+    // ==================== 8. 健康检查（公开） ====================
     let health_routes = Router::new().route("/health", get(health_check));
 
     // ==================== 合并所有路由 ====================
@@ -224,6 +263,9 @@ pub fn create_router(state: AppState) -> Router {
         .merge(admin_routes)
         .merge(billing_routes)
         .merge(debug_routes)
+        .merge(payment_routes)
+        .merge(payment_notify_routes)
+        .merge(admin_payment_routes)
         .merge(health_routes)
         .layer(axum::middleware::from_fn(request_logger))
         .layer(axum::middleware::from_fn(trace_id_middleware))

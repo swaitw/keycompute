@@ -159,6 +159,8 @@ pub struct AppState {
     pub billing: Arc<BillingService>,
     /// 邮件服务
     pub email_service: Arc<EmailService>,
+    /// 支付服务（可选）
+    pub payment: Option<Arc<keycompute_alipay::PaymentService>>,
 }
 
 impl std::fmt::Debug for AppState {
@@ -176,6 +178,10 @@ impl std::fmt::Debug for AppState {
             .field("http_proxy", &"<HttpProxy>")
             .field("billing", &"<BillingService>")
             .field("email_service", &"<EmailService>")
+            .field(
+                "payment",
+                &self.payment.as_ref().map(|_| "<PaymentService>"),
+            )
             .finish()
     }
 }
@@ -254,6 +260,7 @@ impl AppState {
             http_proxy,
             billing,
             email_service,
+            payment: None, // 支付服务需要数据库连接
         }
     }
 
@@ -375,6 +382,26 @@ impl AppState {
         // 创建邮件服务
         let email_service = Arc::new(EmailService::new(config.email));
 
+        // 尝试初始化支付服务
+        let payment = match keycompute_alipay::AlipayConfig::from_env() {
+            Ok(alipay_config) => {
+                match keycompute_alipay::PaymentService::new(alipay_config, (*pool).clone()) {
+                    Ok(service) => {
+                        tracing::info!("Payment service initialized successfully");
+                        Some(Arc::new(service))
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to initialize payment service: {}", e);
+                        None
+                    }
+                }
+            }
+            Err(_) => {
+                tracing::info!("Payment service not configured, skipping initialization");
+                None
+            }
+        };
+
         Self {
             pool: Some(pool),
             auth: Arc::new(auth_service),
@@ -388,6 +415,7 @@ impl AppState {
             http_proxy,
             billing,
             email_service,
+            payment,
         }
     }
 
@@ -459,6 +487,7 @@ impl AppState {
             http_proxy,
             billing,
             email_service,
+            payment: None, // 测试环境不需要支付服务
         }
     }
 
