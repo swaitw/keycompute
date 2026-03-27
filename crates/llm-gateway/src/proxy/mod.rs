@@ -15,13 +15,13 @@
 
 pub mod client;
 pub mod config;
-pub mod proxy;
 pub mod request;
+mod selector;
 
 pub use client::HttpClient;
 pub use config::ProxyConfig;
-pub use proxy::ProxySelector;
 pub use request::ProxyRequest;
+pub use selector::ProxySelector;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -98,10 +98,10 @@ impl HttpProxy {
         account_id: Option<uuid::Uuid>,
     ) -> Arc<HttpClient> {
         // 优先检查账号级代理
-        if let Some(id) = account_id {
-            if let Some(proxy_url) = self.proxy_selector.select_for_account(provider, id) {
-                return Arc::new(HttpClient::new(&self.config, Some(proxy_url)));
-            }
+        if let Some(id) = account_id
+            && let Some(proxy_url) = self.proxy_selector.select_for_account(provider, id)
+        {
+            return Arc::new(HttpClient::new(&self.config, Some(proxy_url)));
         }
 
         // 回退到 Provider 级代理

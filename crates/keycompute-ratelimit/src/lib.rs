@@ -191,7 +191,7 @@ impl MemoryRateLimiter {
     fn get_request_counter_entry(
         &self,
         key: &RateLimitKey,
-    ) -> dashmap::mapref::one::Ref<RateLimitKey, RateCounter> {
+    ) -> dashmap::mapref::one::Ref<'_, RateLimitKey, RateCounter> {
         self.request_counters
             .entry(key.clone())
             .or_insert_with(|| RateCounter::new(self.window_size))
@@ -202,7 +202,7 @@ impl MemoryRateLimiter {
     fn get_token_counter_entry(
         &self,
         key: &RateLimitKey,
-    ) -> dashmap::mapref::one::Ref<RateLimitKey, RateCounter> {
+    ) -> dashmap::mapref::one::Ref<'_, RateLimitKey, RateCounter> {
         self.token_counters
             .entry(key.clone())
             .or_insert_with(|| RateCounter::new(self.window_size))
@@ -213,7 +213,7 @@ impl MemoryRateLimiter {
     fn get_request_counter_mut(
         &self,
         key: &RateLimitKey,
-    ) -> dashmap::mapref::one::RefMut<RateLimitKey, RateCounter> {
+    ) -> dashmap::mapref::one::RefMut<'_, RateLimitKey, RateCounter> {
         self.request_counters
             .entry(key.clone())
             .or_insert_with(|| RateCounter::new(self.window_size))
@@ -223,7 +223,7 @@ impl MemoryRateLimiter {
     fn get_token_counter_mut(
         &self,
         key: &RateLimitKey,
-    ) -> dashmap::mapref::one::RefMut<RateLimitKey, RateCounter> {
+    ) -> dashmap::mapref::one::RefMut<'_, RateLimitKey, RateCounter> {
         self.token_counters
             .entry(key.clone())
             .or_insert_with(|| RateCounter::new(self.window_size))
@@ -249,16 +249,16 @@ impl RateLimiter for MemoryRateLimiter {
         config: &RateLimitConfig,
     ) -> Result<bool> {
         // 检查是否过期，如果过期重置
-        if let Some(counter) = self.request_counters.get(key) {
-            if counter.is_expired() {
-                drop(counter);
-                if let Some(mut entry) = self.request_counters.get_mut(key) {
-                    entry.reset();
-                }
-                // 同时重置 Token 计数器
-                if let Some(mut entry) = self.token_counters.get_mut(key) {
-                    entry.reset();
-                }
+        if let Some(counter) = self.request_counters.get(key)
+            && counter.is_expired()
+        {
+            drop(counter);
+            if let Some(mut entry) = self.request_counters.get_mut(key) {
+                entry.reset();
+            }
+            // 同时重置 Token 计数器
+            if let Some(mut entry) = self.token_counters.get_mut(key) {
+                entry.reset();
             }
         }
 
@@ -269,13 +269,13 @@ impl RateLimiter for MemoryRateLimiter {
     }
 
     async fn record(&self, key: &RateLimitKey) -> Result<()> {
-        let mut counter = self.get_request_counter_mut(key);
+        let counter = self.get_request_counter_mut(key);
         counter.increment();
         Ok(())
     }
 
     async fn record_tokens(&self, key: &RateLimitKey, tokens: u32) -> Result<()> {
-        let mut counter = self.get_token_counter_mut(key);
+        let counter = self.get_token_counter_mut(key);
         counter.count.fetch_add(tokens as u64, Ordering::Relaxed);
         Ok(())
     }

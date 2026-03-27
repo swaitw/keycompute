@@ -442,15 +442,14 @@ impl HttpTransport for MockHttpTransport {
                     }
 
                     // 检查是否需要注入错误
-                    if let Some(err_idx) = error_at {
-                        if index == err_idx {
-                            if let Some(msg) = error_message {
-                                return Some((
-                                    Err(KeyComputeError::ProviderError(msg)),
-                                    (chunks, index + 1, delay, None, None),
-                                ));
-                            }
-                        }
+                    if let Some(err_idx) = error_at
+                        && index == err_idx
+                        && let Some(msg) = error_message
+                    {
+                        return Some((
+                            Err(KeyComputeError::ProviderError(msg)),
+                            (chunks, index + 1, delay, None, None),
+                        ));
                     }
 
                     let chunk = chunks[index].clone();

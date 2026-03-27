@@ -55,7 +55,7 @@ impl UserCredential {
             RETURNING *
             "#,
         )
-        .bind(&req.user_id)
+        .bind(req.user_id)
         .bind(&req.password_hash)
         .fetch_one(pool)
         .await?;
@@ -114,11 +114,11 @@ impl UserCredential {
             "#,
         )
         .bind(&req.password_hash)
-        .bind(&req.email_verified)
-        .bind(&req.email_verified_at)
-        .bind(&req.failed_login_attempts)
-        .bind(&req.locked_until)
-        .bind(&req.last_login_at)
+        .bind(req.email_verified)
+        .bind(req.email_verified_at)
+        .bind(req.failed_login_attempts)
+        .bind(req.locked_until)
+        .bind(req.last_login_at)
         .bind(&req.last_login_ip)
         .bind(self.id)
         .fetch_one(pool)

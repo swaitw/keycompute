@@ -645,8 +645,8 @@ mod tests {
         let other_score = engine.score_provider("other", &pricing);
 
         // 两者应该都有合理的分数（0-200 范围）
-        assert!(openai_score >= 0.0 && openai_score <= 200.0);
-        assert!(other_score >= 0.0 && other_score <= 200.0);
+        assert!((0.0..=200.0).contains(&openai_score));
+        assert!((0.0..=200.0).contains(&other_score));
     }
 
     #[test]

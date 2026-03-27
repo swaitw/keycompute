@@ -85,7 +85,7 @@ fn test_billing_with_different_pricing() {
     let mut chain = VerificationChain::new();
 
     // 测试用例：不同的输入/输出价格
-    let test_cases = vec![
+    let test_cases = [
         // (input_price, output_price, input_tokens, output_tokens, expected)
         (
             Decimal::from(1),
@@ -369,7 +369,7 @@ async fn test_billing_triggers_distribution() {
                 "Usage log ID: {:?}, Amount: {:?}",
                 usage_log.id, usage_log.user_amount
             ),
-            !usage_log.id.is_nil() && usage_log.user_amount > BigDecimal::from(0),
+            !usage_log.id.is_nil() && usage_log.user_amount > 0,
         );
 
         // 5. 验证计费金额正确

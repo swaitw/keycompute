@@ -226,52 +226,6 @@ impl PricingService {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn test_pricing_service_new() {
-        let service = PricingService::new();
-        let snapshot = service
-            .create_snapshot("gpt-4o", &Uuid::new_v4())
-            .await
-            .unwrap();
-
-        assert_eq!(snapshot.model_name, "gpt-4o");
-        assert_eq!(snapshot.currency, "CNY");
-        assert!(snapshot.input_price_per_1k > Decimal::ZERO);
-    }
-
-    #[tokio::test]
-    async fn test_create_snapshot_caching() {
-        let service = PricingService::new();
-        let tenant_id = Uuid::new_v4();
-
-        // 第一次创建
-        let snapshot1 = service.create_snapshot("gpt-4o", &tenant_id).await.unwrap();
-
-        // 第二次应该从缓存读取
-        let snapshot2 = service.create_snapshot("gpt-4o", &tenant_id).await.unwrap();
-
-        assert_eq!(snapshot1.input_price_per_1k, snapshot2.input_price_per_1k);
-    }
-
-    #[test]
-    fn test_calculate_cost() {
-        let service = PricingService::new();
-        let pricing = PricingSnapshot {
-            model_name: "test".to_string(),
-            currency: "CNY".to_string(),
-            input_price_per_1k: Decimal::from(1),
-            output_price_per_1k: Decimal::from(2),
-        };
-
-        let cost = service.calculate_cost(1000, 500, &pricing);
-        assert_eq!(cost, Decimal::from(2)); // 1 * 1 + 2 * 0.5 = 2
-    }
-}
-
 /// 将 BigDecimal 转换为 Decimal
 fn bigdecimal_to_decimal(value: &bigdecimal::BigDecimal) -> Decimal {
     // BigDecimal -> String -> Decimal

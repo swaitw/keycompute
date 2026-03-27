@@ -1,6 +1,6 @@
 //! 支付宝签名和验签模块
 //
-//! 使用RSA2 (SHA256withRSA) 签名算法
+//! 使用 RSA2 (SHA256withRSA) 签名算法
 
 use base64::{Engine, engine::general_purpose::STANDARD};
 use rsa::{
@@ -82,17 +82,18 @@ impl AlipayVerifier {
 }
 
 /// 签名错误
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, Default, thiserror::Error)]
 pub enum SignError {
     #[error("无效的私钥")]
+    #[default]
     InvalidPrivateKey,
     #[error("无效的公钥")]
     InvalidPublicKey,
     #[error("无效的签名")]
     InvalidSignature,
-    #[error("签名失败: {0}")]
+    #[error("签名失败：{0}")]
     SignFailed(String),
-    #[error("验签失败: {0}")]
+    #[error("验签失败：{0}")]
     VerifyFailed(String),
 }
 
@@ -151,14 +152,12 @@ pub fn verify_params(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
-    // 注意：实际测试需要真实的RSA密钥对
+    // 注意：实际测试需要真实的 RSA 密钥对
     // 这里只测试基本的结构
 
     #[test]
     fn test_sign_params_ordering() {
-        let params = vec![
+        let params = [
             ("c".to_string(), "3".to_string()),
             ("a".to_string(), "1".to_string()),
             ("b".to_string(), "2".to_string()),

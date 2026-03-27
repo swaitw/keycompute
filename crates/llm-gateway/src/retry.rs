@@ -56,11 +56,11 @@ impl RetryPolicy {
         }
 
         // 某些错误不应该重试
-        match error {
-            keycompute_types::KeyComputeError::AuthError(_) => false,
-            keycompute_types::KeyComputeError::RateLimitExceeded => false,
-            _ => true,
-        }
+        !matches!(
+            error,
+            keycompute_types::KeyComputeError::AuthError(_)
+                | keycompute_types::KeyComputeError::RateLimitExceeded
+        )
     }
 }
 

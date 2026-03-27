@@ -45,7 +45,7 @@ impl Permission {
     }
 
     /// 从字符串解析权限
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse(s: &str) -> Option<Self> {
         match s {
             "api:use" => Some(Permission::UseApi),
             "usage:view" => Some(Permission::ViewUsage),
@@ -59,6 +59,11 @@ impl Permission {
             "system:admin" => Some(Permission::SystemAdmin),
             _ => None,
         }
+    }
+
+    #[allow(clippy::should_implement_trait)]
+    pub fn from_str(s: &str) -> Option<Self> {
+        Self::parse(s)
     }
 }
 
@@ -139,8 +144,8 @@ mod tests {
 
     #[test]
     fn test_permission_from_str() {
-        assert_eq!(Permission::from_str("api:use"), Some(Permission::UseApi));
-        assert_eq!(Permission::from_str("invalid"), None);
+        assert_eq!(Permission::parse("api:use"), Some(Permission::UseApi));
+        assert_eq!(Permission::parse("invalid"), None);
     }
 
     #[test]

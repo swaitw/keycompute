@@ -55,12 +55,12 @@ impl TenantDistributionRule {
             RETURNING *
             "#,
         )
-        .bind(&req.tenant_id)
-        .bind(&req.beneficiary_id)
+        .bind(req.tenant_id)
+        .bind(req.beneficiary_id)
         .bind(&req.share_ratio)
         .bind(req.priority.unwrap_or(0))
         .bind(req.effective_from.unwrap_or_else(Utc::now))
-        .bind(&req.effective_until)
+        .bind(req.effective_until)
         .fetch_one(pool)
         .await?;
 
@@ -140,7 +140,7 @@ impl TenantDistributionRule {
         .bind(&req.share_ratio)
         .bind(req.priority)
         .bind(req.enabled)
-        .bind(&req.effective_until)
+        .bind(req.effective_until)
         .bind(self.id)
         .fetch_one(pool)
         .await?;
@@ -170,10 +170,10 @@ impl TenantDistributionRule {
             return false;
         }
 
-        if let Some(effective_until) = self.effective_until {
-            if effective_until <= now {
-                return false;
-            }
+        if let Some(effective_until) = self.effective_until
+            && effective_until <= now
+        {
+            return false;
         }
 
         true

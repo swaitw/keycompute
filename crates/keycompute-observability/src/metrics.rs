@@ -3,7 +3,7 @@ use prometheus::{Counter, Histogram, IntCounter, IntGauge, Registry, histogram_o
 use std::sync::Arc;
 
 /// 全局指标注册表
-pub static REGISTRY: Lazy<Registry> = Lazy::new(|| Registry::new());
+pub static REGISTRY: Lazy<Registry> = Lazy::new(Registry::new);
 
 // ==================== 请求指标 ====================
 

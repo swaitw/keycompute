@@ -157,10 +157,10 @@ impl MockProduceAiKey {
         if self.revoked {
             return false;
         }
-        if let Some(expires) = self.expires_at {
-            if expires < Utc::now() {
-                return false;
-            }
+        if let Some(expires) = self.expires_at
+            && expires < Utc::now()
+        {
+            return false;
         }
         true
     }

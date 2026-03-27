@@ -42,9 +42,9 @@ impl PasswordReset {
             RETURNING *
             "#,
         )
-        .bind(&req.user_id)
+        .bind(req.user_id)
         .bind(&req.token)
-        .bind(&req.expires_at)
+        .bind(req.expires_at)
         .bind(&req.requested_from_ip)
         .fetch_one(pool)
         .await?;

@@ -31,7 +31,6 @@ pub use stream::parse_claude_stream;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use keycompute_provider_trait::ProviderAdapter;
 
     #[test]
     fn test_claude_provider_exports() {

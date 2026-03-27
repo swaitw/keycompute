@@ -68,7 +68,7 @@ impl Account {
             RETURNING *
             "#,
         )
-        .bind(&req.tenant_id)
+        .bind(req.tenant_id)
         .bind(&req.provider)
         .bind(&req.name)
         .bind(&req.endpoint)

@@ -5,17 +5,13 @@ use serde::Deserialize;
 /// 支付宝环境
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum AlipayEnv {
     /// 沙箱环境
     Sandbox,
     /// 生产环境
+    #[default]
     Production,
-}
-
-impl Default for AlipayEnv {
-    fn default() -> Self {
-        Self::Production
-    }
 }
 
 impl AlipayEnv {
@@ -179,9 +175,7 @@ fn format_private_key(key: &str) -> String {
         .replace("-----END PRIVATE KEY-----", "")
         .replace("-----BEGIN RSA PRIVATE KEY-----", "")
         .replace("-----END RSA PRIVATE KEY-----", "")
-        .replace("\\n", "")
-        .replace('\n', "")
-        .replace(' ', "");
+        .replace(['\\', 'n', '\n', ' '], "");
 
     format!(
         "-----BEGIN PRIVATE KEY-----\n{}\n-----END PRIVATE KEY-----",
@@ -189,16 +183,14 @@ fn format_private_key(key: &str) -> String {
     )
 }
 
-/// 格式化公钥（添加PEM头尾）
+/// 格式化公钥（添加 PEM 头尾）
 fn format_public_key(key: &str) -> String {
     let key = key
         .replace("-----BEGIN PUBLIC KEY-----", "")
         .replace("-----END PUBLIC KEY-----", "")
         .replace("-----BEGIN RSA PUBLIC KEY-----", "")
         .replace("-----END RSA PUBLIC KEY-----", "")
-        .replace("\\n", "")
-        .replace('\n', "")
-        .replace(' ', "");
+        .replace(['\\', 'n', '\n', ' '], "");
 
     format!(
         "-----BEGIN PUBLIC KEY-----\n{}\n-----END PUBLIC KEY-----",

@@ -96,14 +96,11 @@ fn parse_claude_event(data: &str, accumulated_text: &mut String) -> Result<Optio
         }
         ClaudeStreamEvent::ContentBlockStart { content_block, .. } => {
             // 内容块开始
-            match content_block {
-                crate::protocol::ContentBlock::Text { text } => {
-                    if !text.is_empty() {
-                        accumulated_text.push_str(&text);
-                        return Ok(Some(StreamEvent::delta(text)));
-                    }
-                }
-                _ => {} // 其他类型块暂不处理
+            if let crate::protocol::ContentBlock::Text { text } = content_block
+                && !text.is_empty()
+            {
+                accumulated_text.push_str(&text);
+                return Ok(Some(StreamEvent::delta(text)));
             }
             Ok(None)
         }

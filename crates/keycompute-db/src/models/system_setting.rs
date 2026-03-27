@@ -269,7 +269,7 @@ impl SystemSetting {
         let mut updated = Vec::new();
 
         for (key, value) in settings {
-            if let Some(setting) = Self::update_value(pool, key, value).await.ok() {
+            if let Ok(setting) = Self::update_value(pool, key, value).await {
                 updated.push(setting);
             }
         }

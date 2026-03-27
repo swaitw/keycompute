@@ -238,17 +238,17 @@ impl ProviderAdapter for MockProvider {
                 }
 
                 // 检查是否需要注入流错误
-                if let Some(ref err_config) = stream_error {
-                    if index == err_config.at_chunk {
-                        let event = StreamEvent::Error {
-                            message: err_config.error_message.clone(),
-                        };
-                        // 发送错误后继续（模拟部分数据后错误）
-                        return Some((
-                            Ok(event),
-                            (chunks, index + 1, input, output, None, per_chunk_delay),
-                        ));
-                    }
+                if let Some(ref err_config) = stream_error
+                    && index == err_config.at_chunk
+                {
+                    let event = StreamEvent::Error {
+                        message: err_config.error_message.clone(),
+                    };
+                    // 发送错误后继续（模拟部分数据后错误）
+                    return Some((
+                        Ok(event),
+                        (chunks, index + 1, input, output, None, per_chunk_delay),
+                    ));
                 }
 
                 let content = chunks[index].clone();

@@ -41,7 +41,7 @@ impl User {
             RETURNING *
             "#,
         )
-        .bind(&req.tenant_id)
+        .bind(req.tenant_id)
         .bind(&req.email)
         .bind(&req.name)
         .bind(&req.role)

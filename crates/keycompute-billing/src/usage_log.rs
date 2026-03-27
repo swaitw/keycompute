@@ -665,6 +665,19 @@ impl NewUsageLogBuilder {
     }
 }
 
+/// 将 Decimal 转换为 BigDecimal
+fn decimal_to_bigdecimal(value: &Decimal) -> bigdecimal::BigDecimal {
+    // Decimal -> String -> BigDecimal
+    let s = value.to_string();
+    s.parse().unwrap_or(bigdecimal::BigDecimal::from(0))
+}
+
+/// 将 BigDecimal 转换为 Decimal
+fn bigdecimal_to_decimal(value: &bigdecimal::BigDecimal) -> Decimal {
+    let s = value.to_string();
+    s.parse().unwrap_or(Decimal::from(0))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -726,17 +739,4 @@ mod tests {
         // 1000/1000*1 + 500/1000*2 = 1 + 1 = 2
         assert_eq!(log.user_amount, Decimal::from(2));
     }
-}
-
-/// 将 Decimal 转换为 BigDecimal
-fn decimal_to_bigdecimal(value: &Decimal) -> bigdecimal::BigDecimal {
-    // Decimal -> String -> BigDecimal
-    let s = value.to_string();
-    s.parse().unwrap_or(bigdecimal::BigDecimal::from(0))
-}
-
-/// 将 BigDecimal 转换为 Decimal
-fn bigdecimal_to_decimal(value: &bigdecimal::BigDecimal) -> Decimal {
-    let s = value.to_string();
-    s.parse().unwrap_or(Decimal::from(0))
 }

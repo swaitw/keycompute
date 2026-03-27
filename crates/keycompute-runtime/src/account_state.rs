@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use uuid::Uuid;
 
 /// 账号状态
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct AccountState {
     /// 连续错误计数
     pub error_count: u32,
@@ -23,19 +23,6 @@ pub struct AccountState {
     pub current_rpm: u32,
     /// 最后一次请求时间
     pub last_request_at: Option<Instant>,
-}
-
-impl Default for AccountState {
-    fn default() -> Self {
-        Self {
-            error_count: 0,
-            total_requests: 0,
-            last_error_at: None,
-            cooldown_until: None,
-            current_rpm: 0,
-            last_request_at: None,
-        }
-    }
 }
 
 impl AccountState {
@@ -150,7 +137,7 @@ impl AccountStateStore {
                 state.cooldown_until = None;
                 state.last_error_at = None;
             })
-            .or_insert_with(AccountState::new);
+            .or_default();
     }
 
     /// Gateway 调用：记录请求
@@ -166,11 +153,10 @@ impl AccountStateStore {
                 // 简单的 RPM 估算（实际应该使用滑动窗口）
                 state.current_rpm += 1;
             })
-            .or_insert_with(|| {
-                let mut state = AccountState::new();
-                state.last_request_at = Some(now);
-                state.current_rpm = 1;
-                state
+            .or_insert_with(|| AccountState {
+                last_request_at: Some(now),
+                current_rpm: 1,
+                ..Default::default()
             });
     }
 
@@ -218,10 +204,10 @@ impl AccountStateStore {
     pub fn cleanup_expired_cooldowns(&self) {
         let now = Instant::now();
         self.states.retain(|_id, state| {
-            if let Some(cooldown) = state.cooldown_until {
-                if cooldown <= now {
-                    state.cooldown_until = None;
-                }
+            if let Some(cooldown) = state.cooldown_until
+                && cooldown <= now
+            {
+                state.cooldown_until = None;
             }
             true // 保留所有条目
         });

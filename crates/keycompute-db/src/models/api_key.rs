@@ -76,12 +76,12 @@ impl ProduceAiKey {
             RETURNING *
             "#,
         )
-        .bind(&req.tenant_id)
-        .bind(&req.user_id)
+        .bind(req.tenant_id)
+        .bind(req.user_id)
         .bind(&req.name)
         .bind(&req.produce_ai_key_hash)
         .bind(&req.produce_ai_key_preview)
-        .bind(&req.expires_at)
+        .bind(req.expires_at)
         .fetch_one(pool)
         .await?;
 
@@ -188,10 +188,10 @@ impl ProduceAiKey {
             return false;
         }
 
-        if let Some(expires_at) = self.expires_at {
-            if expires_at < Utc::now() {
-                return false;
-            }
+        if let Some(expires_at) = self.expires_at
+            && expires_at < Utc::now()
+        {
+            return false;
         }
 
         true

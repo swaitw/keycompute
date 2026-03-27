@@ -46,10 +46,10 @@ impl HttpClient {
 
         // 代理配置
         let has_proxy = proxy_url.is_some();
-        if let Some(url) = proxy_url {
-            if let Ok(proxy) = Proxy::all(url) {
-                builder = builder.proxy(proxy);
-            }
+        if let Some(url) = proxy_url
+            && let Ok(proxy) = Proxy::all(url)
+        {
+            builder = builder.proxy(proxy);
         }
 
         let client = builder.build().unwrap_or_else(|_| Client::new());

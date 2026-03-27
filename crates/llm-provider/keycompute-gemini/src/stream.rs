@@ -110,24 +110,23 @@ fn parse_gemini_event(data: &str) -> Result<Option<StreamEvent>> {
         )));
     }
 
-    // 处理候选结果
-    if let Some(candidate) = response.candidates.first() {
-        // 提取文本内容
-        if let Some(part) = candidate.content.parts.first() {
-            if let Some(text) = &part.text {
-                if !text.is_empty() {
-                    return Ok(Some(StreamEvent::delta(text.clone())));
-                }
-            }
-        }
+    // 处理候选结果和检查是否结束
+    if let Some(candidate) = response.candidates.first()
+        && let Some(part) = candidate.content.parts.first()
+        && let Some(text) = &part.text
+        && !text.is_empty()
+    {
+        return Ok(Some(StreamEvent::delta(text.clone())));
+    }
 
-        // 检查是否结束
-        if let Some(finish_reason) = &candidate.finishReason {
-            return Ok(Some(StreamEvent::Delta {
-                content: String::new(),
-                finish_reason: Some(finish_reason.clone()),
-            }));
-        }
+    // 检查是否结束
+    if let Some(candidate) = response.candidates.first()
+        && let Some(finish_reason) = &candidate.finishReason
+    {
+        return Ok(Some(StreamEvent::Delta {
+            content: String::new(),
+            finish_reason: Some(finish_reason.clone()),
+        }));
     }
 
     Ok(None)

@@ -68,6 +68,11 @@ impl ClaudeProvider {
         Self
     }
 
+    /// 获取提供者名称
+    pub fn name(&self) -> &'static str {
+        "claude"
+    }
+
     /// 构建 Claude 请求体
     ///
     /// 将标准化的 UpstreamRequest 转换为 Claude Messages API 格式

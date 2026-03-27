@@ -36,6 +36,7 @@ use tokio::sync::mpsc;
 /// - 请求追踪
 #[derive(Debug)]
 pub struct GatewayExecutor {
+    #[allow(dead_code)]
     config: GatewayConfig,
     providers: HashMap<String, Arc<dyn ProviderAdapter>>,
     /// Internal HTTP Proxy（统一上游连接管理）
@@ -292,6 +293,7 @@ mod tests {
     use keycompute_types::{Message, PricingSnapshot, UsageAccumulator};
     use rust_decimal::Decimal;
 
+    #[allow(dead_code)]
     fn create_test_context() -> RequestContext {
         RequestContext {
             request_id: uuid::Uuid::new_v4(),

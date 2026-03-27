@@ -124,21 +124,19 @@ where
 {
     type Rejection = std::convert::Infallible;
 
-    fn from_request_parts(
+    async fn from_request_parts(
         parts: &mut Parts,
         _state: &S,
-    ) -> impl Future<Output = std::result::Result<Self, Self::Rejection>> + Send {
-        async move {
-            // 尝试从 X-Request-ID 头获取，否则生成新的
-            let id = parts
-                .headers
-                .get("X-Request-ID")
-                .and_then(|h| h.to_str().ok())
-                .and_then(|s| Uuid::parse_str(s).ok())
-                .unwrap_or_else(Uuid::new_v4);
+    ) -> std::result::Result<Self, Self::Rejection> {
+        // 尝试从 X-Request-ID 头获取，否则生成新的
+        let id = parts
+            .headers
+            .get("X-Request-ID")
+            .and_then(|h| h.to_str().ok())
+            .and_then(|s| Uuid::parse_str(s).ok())
+            .unwrap_or_else(Uuid::new_v4);
 
-            Ok(Self(id))
-        }
+        Ok(Self(id))
     }
 }
 

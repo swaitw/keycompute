@@ -48,10 +48,10 @@ impl EmailVerification {
             RETURNING *
             "#,
         )
-        .bind(&req.user_id)
+        .bind(req.user_id)
         .bind(&req.email)
         .bind(&req.token)
-        .bind(&req.expires_at)
+        .bind(req.expires_at)
         .fetch_one(pool)
         .await?;
 

@@ -75,7 +75,7 @@ fn test_password_length_validation() {
     chain.add_step(
         "keycompute-auth",
         "length_long_password",
-        format!("长密码(103): 验证通过"),
+        "长密码 (103): 验证通过".to_string(),
         validator.validate(&long_password).is_ok(),
     );
 

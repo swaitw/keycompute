@@ -140,9 +140,9 @@ impl Tenant {
         .bind(&req.name)
         .bind(&req.description)
         .bind(&req.status)
-        .bind(&req.default_rpm_limit)
-        .bind(&req.default_tpm_limit)
-        .bind(&req.distribution_enabled)
+        .bind(req.default_rpm_limit)
+        .bind(req.default_tpm_limit)
+        .bind(req.distribution_enabled)
         .bind(self.id)
         .fetch_one(pool)
         .await?;

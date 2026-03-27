@@ -33,7 +33,7 @@ impl PaymentOrderStatus {
         }
     }
 
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse(s: &str) -> Option<Self> {
         match s {
             "pending" => Some(PaymentOrderStatus::Pending),
             "paid" => Some(PaymentOrderStatus::Paid),
@@ -69,7 +69,7 @@ impl PaymentMethod {
         }
     }
 
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse(s: &str) -> Option<Self> {
         match s {
             "alipay" => Some(PaymentMethod::Alipay),
             "wechatpay" => Some(PaymentMethod::WechatPay),
@@ -119,7 +119,7 @@ pub struct PaymentOrder {
 impl PaymentOrder {
     /// 获取订单状态枚举
     pub fn get_status(&self) -> Option<PaymentOrderStatus> {
-        PaymentOrderStatus::from_str(&self.status)
+        PaymentOrderStatus::parse(&self.status)
     }
 
     /// 检查订单是否可支付
@@ -174,10 +174,10 @@ impl PaymentOrder {
             RETURNING *
             "#,
         )
-        .bind(&req.tenant_id)
-        .bind(&req.user_id)
+        .bind(req.tenant_id)
+        .bind(req.user_id)
         .bind(out_trade_no)
-        .bind(&req.amount)
+        .bind(req.amount)
         .bind("CNY")
         .bind(PaymentOrderStatus::Pending.as_str())
         .bind(PaymentMethod::Alipay.as_str())

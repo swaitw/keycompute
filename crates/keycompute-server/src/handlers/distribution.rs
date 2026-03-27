@@ -555,12 +555,12 @@ pub async fn update_distribution_rule(
     }
 
     // 验证参数
-    if let Some(ratio) = req.share_ratio {
-        if ratio < 0.0 || ratio > 1.0 {
-            return Err(ApiError::BadRequest(
-                "share_ratio must be between 0.0 and 1.0".to_string(),
-            ));
-        }
+    if let Some(ratio) = req.share_ratio
+        && !(0.0..=1.0).contains(&ratio)
+    {
+        return Err(ApiError::BadRequest(
+            "share_ratio must be between 0.0 and 1.0".to_string(),
+        ));
     }
 
     let pool = state

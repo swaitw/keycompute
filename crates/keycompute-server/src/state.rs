@@ -17,18 +17,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 /// 限流后端配置
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub enum RateLimitBackendConfig {
     /// 内存后端
+    #[default]
     Memory,
     /// Redis 后端
     Redis { url: String },
-}
-
-impl Default for RateLimitBackendConfig {
-    fn default() -> Self {
-        Self::Memory
-    }
 }
 
 /// JWT 配置
@@ -53,7 +48,7 @@ impl Default for JwtConfig {
 }
 
 /// 应用状态配置
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct AppStateConfig {
     /// 限流后端配置
     pub rate_limit: RateLimitBackendConfig,
@@ -63,17 +58,6 @@ pub struct AppStateConfig {
     pub gateway: keycompute_config::GatewayConfig,
     /// 邮件服务配置
     pub email: EmailConfig,
-}
-
-impl Default for AppStateConfig {
-    fn default() -> Self {
-        Self {
-            rate_limit: RateLimitBackendConfig::default(),
-            jwt: JwtConfig::default(),
-            gateway: keycompute_config::GatewayConfig::default(),
-            email: EmailConfig::default(),
-        }
-    }
 }
 
 impl AppStateConfig {

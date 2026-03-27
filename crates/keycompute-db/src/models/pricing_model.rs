@@ -60,7 +60,7 @@ impl PricingModel {
             RETURNING *
             "#,
         )
-        .bind(&req.tenant_id)
+        .bind(req.tenant_id)
         .bind(&req.model_name)
         .bind(&req.provider)
         .bind(req.currency.as_deref().unwrap_or("CNY"))
@@ -68,7 +68,7 @@ impl PricingModel {
         .bind(&req.output_price_per_1k)
         .bind(req.is_default.unwrap_or(false))
         .bind(req.effective_from.unwrap_or_else(Utc::now))
-        .bind(&req.effective_until)
+        .bind(req.effective_until)
         .fetch_one(pool)
         .await?;
 
@@ -173,7 +173,7 @@ impl PricingModel {
         )
         .bind(&req.input_price_per_1k)
         .bind(&req.output_price_per_1k)
-        .bind(&req.effective_until)
+        .bind(req.effective_until)
         .bind(self.id)
         .fetch_one(pool)
         .await?;
@@ -199,10 +199,10 @@ impl PricingModel {
             return false;
         }
 
-        if let Some(effective_until) = self.effective_until {
-            if effective_until <= now {
-                return false;
-            }
+        if let Some(effective_until) = self.effective_until
+            && effective_until <= now
+        {
+            return false;
         }
 
         true

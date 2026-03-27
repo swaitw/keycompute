@@ -33,7 +33,7 @@ impl TransactionType {
         }
     }
 
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse(s: &str) -> Option<Self> {
         match s {
             "recharge" => Some(TransactionType::Recharge),
             "consume" => Some(TransactionType::Consume),
@@ -305,6 +305,7 @@ pub struct BalanceTransaction {
 
 impl BalanceTransaction {
     /// 内部创建交易记录
+    #[allow(clippy::too_many_arguments)]
     async fn create_internal(
         pool: &mut sqlx::PgConnection,
         tenant_id: Uuid,
@@ -367,6 +368,6 @@ impl BalanceTransaction {
 
     /// 获取交易类型枚举
     pub fn get_transaction_type(&self) -> Option<TransactionType> {
-        TransactionType::from_str(&self.transaction_type)
+        TransactionType::parse(&self.transaction_type)
     }
 }

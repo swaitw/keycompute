@@ -63,7 +63,7 @@ impl DistributionLevel {
     }
 
     /// 从字符串解析
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse(s: &str) -> Option<Self> {
         match s {
             "level1" => Some(DistributionLevel::Level1),
             "level2" => Some(DistributionLevel::Level2),
@@ -97,13 +97,13 @@ mod tests {
         assert_eq!(DistributionLevel::Level2.as_str(), "level2");
 
         assert_eq!(
-            DistributionLevel::from_str("level1"),
+            DistributionLevel::parse("level1"),
             Some(DistributionLevel::Level1)
         );
         assert_eq!(
-            DistributionLevel::from_str("level2"),
+            DistributionLevel::parse("level2"),
             Some(DistributionLevel::Level2)
         );
-        assert_eq!(DistributionLevel::from_str("level3"), None);
+        assert_eq!(DistributionLevel::parse("level3"), None);
     }
 }

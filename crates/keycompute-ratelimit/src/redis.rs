@@ -2,7 +2,7 @@
 //!
 //! 基于 Redis 的分布式限流后端，支持多实例共享限流状态。
 
-use crate::{RPM_LIMIT, RateLimitKey, RateLimiter, WINDOW_SECS};
+use crate::{DEFAULT_RPM_LIMIT, RateLimitKey, RateLimiter, WINDOW_SECS};
 use async_trait::async_trait;
 use keycompute_types::{KeyComputeError, Result};
 use redis::{AsyncCommands, Client};
@@ -90,7 +90,35 @@ impl RateLimiter for RedisRateLimiter {
             .await
             .map_err(|e| KeyComputeError::Internal(format!("Redis error: {}", e)))?;
 
-        Ok(count < RPM_LIMIT as u64)
+        Ok(count < DEFAULT_RPM_LIMIT as u64)
+    }
+
+    async fn check_with_config(
+        &self,
+        key: &RateLimitKey,
+        config: &crate::RateLimitConfig,
+    ) -> Result<bool> {
+        let mut conn = self.get_conn().await?;
+        let redis_key = self.build_key(key);
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+
+        let window_start = now - self.window_size.as_secs() as i64;
+
+        let _: () = conn
+            .zrembyscore(&redis_key, 0, window_start)
+            .await
+            .map_err(|e| KeyComputeError::Internal(format!("Redis error: {}", e)))?;
+
+        let count: u64 = conn
+            .zcard(&redis_key)
+            .await
+            .map_err(|e| KeyComputeError::Internal(format!("Redis error: {}", e)))?;
+
+        Ok(count < config.rpm_limit as u64)
     }
 
     async fn record(&self, key: &RateLimitKey) -> Result<()> {
@@ -116,8 +144,38 @@ impl RateLimiter for RedisRateLimiter {
         Ok(())
     }
 
-    fn rpm_limit(&self) -> u32 {
-        RPM_LIMIT
+    async fn record_tokens(&self, _key: &RateLimitKey, _tokens: u32) -> Result<()> {
+        // Redis 限流器暂不支持 Token 计数，留空实现
+        Ok(())
+    }
+
+    async fn get_count(&self, key: &RateLimitKey) -> Result<u64> {
+        let mut conn = self.get_conn().await?;
+        let redis_key = self.build_key(key);
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+
+        let window_start = now - self.window_size.as_secs() as i64;
+
+        let _: () = conn
+            .zrembyscore(&redis_key, 0, window_start)
+            .await
+            .map_err(|e| KeyComputeError::Internal(format!("Redis error: {}", e)))?;
+
+        let count: u64 = conn
+            .zcard(&redis_key)
+            .await
+            .map_err(|e| KeyComputeError::Internal(format!("Redis error: {}", e)))?;
+
+        Ok(count)
+    }
+
+    async fn get_token_count(&self, _key: &RateLimitKey) -> Result<u64> {
+        // Redis 限流器暂不支持 Token 计数
+        Ok(0)
     }
 }
 

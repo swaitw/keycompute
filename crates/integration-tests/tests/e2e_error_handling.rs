@@ -167,6 +167,7 @@ async fn test_slow_stream() {
 // ============================================================================
 
 /// 创建测试用的请求上下文
+#[allow(dead_code)]
 fn create_test_context() -> RequestContext {
     RequestContext {
         request_id: Uuid::new_v4(),
@@ -880,10 +881,10 @@ async fn test_concurrent_requests_with_cooldown() {
     // 3. 所有检查应该一致
     let mut all_cooling = true;
     while let Some(result) = tasks.join_next().await {
-        if let Ok(is_cooling) = result {
-            if !is_cooling {
-                all_cooling = false;
-            }
+        if let Ok(is_cooling) = result
+            && !is_cooling
+        {
+            all_cooling = false;
         }
     }
 

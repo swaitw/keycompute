@@ -100,11 +100,12 @@ async fn main() -> anyhow::Result<()> {
     let app_state = AppState::with_pool_and_config(pool, state_config);
 
     // 验证生产环境配置
-    if env != "development" && env != "dev" {
-        if let Err(e) = app_state.validate_for_production() {
-            error!("生产环境验证失败: {}", e);
-            std::process::exit(1);
-        }
+    if env != "development"
+        && env != "dev"
+        && let Err(e) = app_state.validate_for_production()
+    {
+        error!("生产环境验证失败：{}", e);
+        std::process::exit(1);
     }
 
     info!("应用状态初始化完成");

@@ -5,7 +5,7 @@
 use serde::Deserialize;
 
 /// 加密配置
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Clone, Default)]
 pub struct CryptoConfig {
     /// 加密密钥（Base64 编码的 32 字节密钥）
     ///
@@ -16,12 +16,6 @@ pub struct CryptoConfig {
     ///
     /// 环境变量：KC__CRYPTO__SECRET_KEY
     pub secret_key: Option<String>,
-}
-
-impl Default for CryptoConfig {
-    fn default() -> Self {
-        Self { secret_key: None }
-    }
 }
 
 impl CryptoConfig {

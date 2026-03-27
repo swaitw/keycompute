@@ -18,6 +18,15 @@ use keycompute_ratelimit::{RateLimitConfig, RateLimitKey};
 use std::time::Instant;
 use tracing::{error, info, warn};
 
+/// 权限中间件的返回类型
+pub type PermissionMiddlewareFn =
+    fn(
+        State<AppState>,
+        AuthExtractor,
+        Request,
+        Next,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Response>> + Send>>;
+
 /// 请求日志中间件
 pub async fn request_logger(req: Request, next: Next) -> Response {
     let start = Instant::now();
@@ -224,6 +233,7 @@ pub async fn require_permission(
 ///         permission_middleware(state, auth, req, next, Permission::ManageUsers)
 ///     }))
 /// ```
+#[allow(clippy::type_complexity)]
 pub fn permission_middleware(
     permission: Permission,
 ) -> impl Fn(
@@ -415,12 +425,7 @@ pub async fn maintenance_mode_middleware(
 
     // 检查维护模式状态
     let is_maintenance = if let Some(pool) = state.pool.as_ref() {
-        match keycompute_db::SystemSetting::get_bool(pool, setting_keys::MAINTENANCE_MODE, false)
-            .await
-        {
-            true => true,
-            false => false,
-        }
+        keycompute_db::SystemSetting::get_bool(pool, setting_keys::MAINTENANCE_MODE, false).await
     } else {
         false // 无数据库连接时不启用维护模式
     };
@@ -435,20 +440,16 @@ pub async fn maintenance_mode_middleware(
         .headers()
         .get("Authorization")
         .and_then(|h| h.to_str().ok())
+        && let Some(token) = auth_header.strip_prefix("Bearer ")
+        && let Ok(auth_context) = state.auth.verify_api_key(token).await
+        && auth_context.role == "admin"
     {
-        if let Some(token) = auth_header.strip_prefix("Bearer ") {
-            // 验证 token
-            if let Ok(auth_context) = state.auth.verify_api_key(token).await {
-                if auth_context.role == "admin" {
-                    // 管理员绕过维护模式
-                    info!(
-                        user_id = %auth_context.user_id,
-                        "Admin bypassing maintenance mode"
-                    );
-                    return next.run(req).await;
-                }
-            }
-        }
+        // 管理员绕过维护模式
+        info!(
+            user_id = %auth_context.user_id,
+            "Admin bypassing maintenance mode"
+        );
+        return next.run(req).await;
     }
 
     // 获取维护消息

@@ -594,7 +594,7 @@ fn test_multi_tenant_isolation() {
     chain.add_step(
         "integration-tests",
         "multi_tenant::create_users",
-        format!("Created users in different tenants"),
+        "Created users in different tenants".to_string(),
         db.stats().user_count == 2,
     );
 

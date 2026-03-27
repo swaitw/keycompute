@@ -48,9 +48,9 @@ impl UserReferral {
             RETURNING *
             "#,
         )
-        .bind(&req.user_id)
-        .bind(&req.level1_referrer_id)
-        .bind(&req.level2_referrer_id)
+        .bind(req.user_id)
+        .bind(req.level1_referrer_id)
+        .bind(req.level2_referrer_id)
         .bind(&req.source)
         .fetch_one(pool)
         .await?;

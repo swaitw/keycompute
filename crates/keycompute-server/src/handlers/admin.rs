@@ -133,15 +133,15 @@ pub async fn list_all_users(
     let mut result = Vec::new();
     for user in users {
         // 应用过滤条件
-        if let Some(filter_tenant_id) = params.tenant_id {
-            if user.tenant_id != filter_tenant_id {
-                continue;
-            }
+        if let Some(filter_tenant_id) = params.tenant_id
+            && user.tenant_id != filter_tenant_id
+        {
+            continue;
         }
-        if let Some(ref filter_role) = params.role {
-            if &user.role != filter_role {
-                continue;
-            }
+        if let Some(ref filter_role) = params.role
+            && &user.role != filter_role
+        {
+            continue;
         }
         if let Some(ref search) = params.search {
             let search_lower = search.to_lowercase();

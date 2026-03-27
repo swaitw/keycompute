@@ -143,21 +143,20 @@ impl PasswordResetService {
         })?;
 
         // 5. 发送密码重置邮件
-        if let Some(email_service) = &self.email_service {
-            if let Err(e) = email_service
+        if let Some(email_service) = &self.email_service
+            && let Err(e) = email_service
                 .send_password_reset_email(&email, &token)
                 .await
-            {
-                tracing::error!(
-                    user_id = %user.id,
-                    email = %email,
-                    error = %e,
-                    "Failed to send password reset email"
-                );
-                return Err(KeyComputeError::AuthError(
-                    "发送重置邮件失败，请稍后重试".to_string(),
-                ));
-            }
+        {
+            tracing::error!(
+                user_id = %user.id,
+                email = %email,
+                error = %e,
+                "Failed to send password reset email"
+            );
+            return Err(KeyComputeError::AuthError(
+                "发送重置邮件失败，请稍后重试".to_string(),
+            ));
         }
 
         tracing::info!(

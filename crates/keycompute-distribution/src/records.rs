@@ -63,7 +63,7 @@ impl DistributionRecord {
 }
 
 /// 分销服务
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct DistributionService {
     /// 数据库连接池（可选）
     pool: Option<Arc<PgPool>>,

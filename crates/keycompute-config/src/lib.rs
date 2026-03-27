@@ -26,7 +26,7 @@ pub use redis::RedisConfig;
 pub use server::ServerConfig;
 
 /// 全局应用配置
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Clone, Default)]
 pub struct AppConfig {
     /// 服务器配置
     pub server: ServerConfig,
@@ -189,20 +189,6 @@ impl AppConfig {
         }
 
         Ok(())
-    }
-}
-
-impl Default for AppConfig {
-    fn default() -> Self {
-        Self {
-            server: ServerConfig::default(),
-            database: DatabaseConfig::default(),
-            redis: None,
-            auth: AuthConfig::default(),
-            gateway: GatewayConfig::default(),
-            crypto: None,
-            email: EmailConfig::default(),
-        }
     }
 }
 

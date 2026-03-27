@@ -382,8 +382,6 @@ fn create_openai_stream(
     billing: Arc<keycompute_billing::BillingService>,
     stream_options: Option<StreamOptions>,
 ) -> impl Stream<Item = std::result::Result<Event, Infallible>> {
-    use futures::stream::StreamExt;
-
     async_stream::stream! {
         let mut status = "success".to_string();
         let mut first_chunk = true;
@@ -448,9 +446,9 @@ fn create_openai_stream(
                             system_fingerprint: Some(format!("fp_{}", provider_name)),
                             choices: vec![],
                             usage: Some(CompletionUsage {
-                                prompt_tokens: input_tokens as u32,
-                                completion_tokens: output_tokens as u32,
-                                total_tokens: (input_tokens + output_tokens) as u32,
+                                prompt_tokens: input_tokens,
+                                completion_tokens: output_tokens,
+                                total_tokens: input_tokens + output_tokens,
                                 prompt_tokens_details: None,
                                 completion_tokens_details: None,
                             }),
@@ -640,7 +638,7 @@ mod tests {
         }"#;
         let req: ChatCompletionRequest = serde_json::from_str(json).unwrap();
         assert!(req.stream);
-        assert_eq!(req.stream_options.unwrap().include_usage, true);
+        assert!(req.stream_options.unwrap().include_usage);
     }
 
     #[test]

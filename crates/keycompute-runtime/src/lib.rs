@@ -94,8 +94,8 @@ impl RuntimeManager {
     /// # 参数
     /// - `redis_url`: Redis 连接 URL
     pub fn new_redis(redis_url: &str) -> Result<Self, redis::RedisError> {
-        let store = RedisRuntimeStore::new(redis_url)?;
-        let store = Arc::new(store);
+        let _store = RedisRuntimeStore::new(redis_url)?;
+        let _store = Arc::new(_store);
 
         // TODO: 后续可以扩展 AccountStateStore、ProviderHealthStore、CooldownManager
         // 支持 Redis 后端，目前保持内存实现

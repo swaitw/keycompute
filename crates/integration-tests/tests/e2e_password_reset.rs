@@ -503,7 +503,7 @@ fn test_reset_token_cleanup() {
     let mut tokens = vec![];
 
     for i in 0..5 {
-        let mut reset = MockPasswordReset::new(user_id, &format!("token_{}", i));
+        let mut reset = MockPasswordReset::new(user_id, format!("token_{}", i));
         if i % 2 == 0 {
             // 标记一些为已使用
             reset.used = true;

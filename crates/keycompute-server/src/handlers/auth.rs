@@ -35,36 +35,35 @@ use uuid::Uuid;
 /// - 提取到的 IP 地址字符串，如果无法提取则返回 None
 fn extract_client_ip(headers: &HeaderMap) -> Option<String> {
     // 1. 尝试从 X-Forwarded-For 获取（反向代理场景）
-    // X-Forwarded-For 格式: client, proxy1, proxy2
+    // X-Forwarded-For 格式：client, proxy1, proxy2
     // 我们需要第一个（最左边的）IP
-    if let Some(forwarded) = headers.get("x-forwarded-for") {
-        if let Ok(value) = forwarded.to_str() {
-            if let Some(client_ip) = value.split(',').next() {
-                let ip = client_ip.trim();
-                if !ip.is_empty() {
-                    return Some(ip.to_string());
-                }
-            }
+    if let Some(forwarded) = headers.get("x-forwarded-for")
+        && let Ok(value) = forwarded.to_str()
+        && let Some(client_ip) = value.split(',').next()
+    {
+        let ip = client_ip.trim();
+        if !ip.is_empty() {
+            return Some(ip.to_string());
         }
     }
 
     // 2. 尝试从 X-Real-IP 获取（Nginx 常用）
-    if let Some(real_ip) = headers.get("x-real-ip") {
-        if let Ok(value) = real_ip.to_str() {
-            let ip = value.trim();
-            if !ip.is_empty() {
-                return Some(ip.to_string());
-            }
+    if let Some(real_ip) = headers.get("x-real-ip")
+        && let Ok(value) = real_ip.to_str()
+    {
+        let ip = value.trim();
+        if !ip.is_empty() {
+            return Some(ip.to_string());
         }
     }
 
     // 3. 尝试从 CF-Connecting-IP 获取（Cloudflare 专用）
-    if let Some(cf_ip) = headers.get("cf-connecting-ip") {
-        if let Ok(value) = cf_ip.to_str() {
-            let ip = value.trim();
-            if !ip.is_empty() {
-                return Some(ip.to_string());
-            }
+    if let Some(cf_ip) = headers.get("cf-connecting-ip")
+        && let Ok(value) = cf_ip.to_str()
+    {
+        let ip = value.trim();
+        if !ip.is_empty() {
+            return Some(ip.to_string());
         }
     }
 
@@ -187,39 +186,39 @@ pub async fn register_handler(
     }
 
     // 处理推荐关系
-    if let Some(ref referral_code) = req.referral_code {
-        if let Ok(level1_referrer_id) = Uuid::parse_str(referral_code) {
-            // 查找一级推荐人的推荐人（二级推荐人）
-            let level2_referrer_id =
-                keycompute_db::UserReferral::find_by_user(pool, level1_referrer_id)
-                    .await
-                    .ok()
-                    .flatten()
-                    .and_then(|r| r.level1_referrer_id);
+    if let Some(ref referral_code) = req.referral_code
+        && let Ok(level1_referrer_id) = Uuid::parse_str(referral_code)
+    {
+        // 查找一级推荐人的推荐人（二级推荐人）
+        let level2_referrer_id =
+            keycompute_db::UserReferral::find_by_user(pool, level1_referrer_id)
+                .await
+                .ok()
+                .flatten()
+                .and_then(|r| r.level1_referrer_id);
 
-            // 创建推荐关系
-            let referral_req = keycompute_db::CreateUserReferralRequest {
-                user_id: response.user_id,
-                level1_referrer_id: Some(level1_referrer_id),
-                level2_referrer_id,
-                source: Some("referral_code".to_string()),
-            };
+        // 创建推荐关系
+        let referral_req = keycompute_db::CreateUserReferralRequest {
+            user_id: response.user_id,
+            level1_referrer_id: Some(level1_referrer_id),
+            level2_referrer_id,
+            source: Some("referral_code".to_string()),
+        };
 
-            if let Err(e) = keycompute_db::UserReferral::create(pool, &referral_req).await {
-                tracing::warn!(
-                    user_id = %response.user_id,
-                    referrer_id = %level1_referrer_id,
-                    error = %e,
-                    "Failed to create referral relationship"
-                );
-            } else {
-                tracing::info!(
-                    user_id = %response.user_id,
-                    level1_referrer = %level1_referrer_id,
-                    level2_referrer = ?level2_referrer_id,
-                    "Referral relationship created"
-                );
-            }
+        if let Err(e) = keycompute_db::UserReferral::create(pool, &referral_req).await {
+            tracing::warn!(
+                user_id = %response.user_id,
+                referrer_id = %level1_referrer_id,
+                error = %e,
+                "Failed to create referral relationship"
+            );
+        } else {
+            tracing::info!(
+                user_id = %response.user_id,
+                level1_referrer = %level1_referrer_id,
+                level2_referrer = ?level2_referrer_id,
+                "Referral relationship created"
+            );
         }
     }
 

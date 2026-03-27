@@ -19,21 +19,16 @@ use uuid::Uuid;
 // ==================== 请求/响应结构体 ====================
 
 /// 支付类型
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum PaymentType {
-    /// 跳转支付（PC网页）
+    /// 跳转支付（PC 网页）
     Page,
-    /// 跳转支付（手机H5）
+    /// 跳转支付（手机 H5）
     Wap,
     /// 扫码支付（当面付）
+    #[default]
     Qr,
-}
-
-impl Default for PaymentType {
-    fn default() -> Self {
-        Self::Qr
-    }
 }
 
 /// 创建支付订单请求
@@ -401,7 +396,7 @@ pub async fn sync_payment_order(
 
     Ok(Json(SyncOrderResponse {
         order_id: result.order_id,
-        out_trade_no: out_trade_no,
+        out_trade_no,
         status: result.status,
         changed: result.changed,
     }))
@@ -426,9 +421,7 @@ pub async fn alipay_notify(
     let params: HashMap<String, String> = form
         .split('&')
         .filter_map(|s| {
-            let mut parts = s.splitn(2, '=');
-            let key = parts.next()?;
-            let value = parts.next()?;
+            let (key, value) = s.split_once('=')?;
             Some((urlencoding_decode(key), urlencoding_decode(value)))
         })
         .collect();

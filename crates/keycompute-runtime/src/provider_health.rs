@@ -298,7 +298,7 @@ mod tests {
         // 100% 成功率 + 低延迟(<100ms) = 100 分
         let score = store.get_score("openai");
         assert!(
-            score >= 90 && score <= 100,
+            (90..=100).contains(&score),
             "Expected score around 100, got {}",
             score
         );

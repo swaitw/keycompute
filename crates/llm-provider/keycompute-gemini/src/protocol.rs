@@ -72,6 +72,7 @@ pub struct InlineData {
 /// 生成配置
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[allow(non_snake_case)]
+#[derive(Default)]
 pub struct GenerationConfig {
     /// 温度 (0-2)
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -247,18 +248,6 @@ impl GeminiRequest {
 impl Default for GeminiRequest {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-impl Default for GenerationConfig {
-    fn default() -> Self {
-        Self {
-            temperature: None,
-            topP: None,
-            topK: None,
-            maxOutputTokens: None,
-            stopSequences: None,
-        }
     }
 }
 

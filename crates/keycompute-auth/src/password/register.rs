@@ -300,20 +300,17 @@ impl RegistrationService {
             })?;
 
         // 发送欢迎邮件（可选）
-        if let Some(email_service) = &self.email_service {
-            // 获取用户信息
-            if let Ok(Some(user)) = User::find_by_id(&self.pool, verification.user_id).await {
-                if let Err(e) = email_service
-                    .send_welcome_email(&verification.email, user.name.as_deref())
-                    .await
-                {
-                    tracing::warn!(
-                        user_id = %verification.user_id,
-                        error = %e,
-                        "Failed to send welcome email"
-                    );
-                }
-            }
+        if let Some(email_service) = &self.email_service
+            && let Ok(Some(user)) = User::find_by_id(&self.pool, verification.user_id).await
+            && let Err(e) = email_service
+                .send_welcome_email(&verification.email, user.name.as_deref())
+                .await
+        {
+            tracing::warn!(
+                user_id = %verification.user_id,
+                error = %e,
+                "Failed to send welcome email"
+            );
         }
 
         tracing::info!(
@@ -368,21 +365,20 @@ impl RegistrationService {
         })?;
 
         // 发送验证邮件
-        if let Some(email_service) = &self.email_service {
-            if let Err(e) = email_service
+        if let Some(email_service) = &self.email_service
+            && let Err(e) = email_service
                 .send_verification_email(&email, &verification_token)
                 .await
-            {
-                tracing::error!(
-                    user_id = %user.id,
-                    email = %email,
-                    error = %e,
-                    "Failed to resend verification email"
-                );
-                return Err(KeyComputeError::AuthError(
-                    "发送验证邮件失败，请稍后重试".to_string(),
-                ));
-            }
+        {
+            tracing::error!(
+                user_id = %user.id,
+                email = %email,
+                error = %e,
+                "Failed to resend verification email"
+            );
+            return Err(KeyComputeError::AuthError(
+                "发送验证邮件失败，请稍后重试".to_string(),
+            ));
         }
 
         tracing::info!(

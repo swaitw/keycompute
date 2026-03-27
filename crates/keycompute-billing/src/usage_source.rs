@@ -3,11 +3,12 @@
 //! 定义用量数据的来源优先级
 
 /// 用量数据来源
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub enum UsageSource {
     /// Provider 报告的用量（优先级最高）
     ProviderReported,
     /// Gateway 累积的用量（当 Provider 未报告时使用）
+    #[default]
     GatewayAccumulated,
 }
 
@@ -21,12 +22,17 @@ impl UsageSource {
     }
 
     /// 从字符串解析
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse(s: &str) -> Option<Self> {
         match s {
             "provider_reported" => Some(UsageSource::ProviderReported),
             "gateway_accumulated" => Some(UsageSource::GatewayAccumulated),
             _ => None,
         }
+    }
+
+    #[allow(clippy::should_implement_trait)]
+    pub fn from_str(s: &str) -> Option<Self> {
+        Self::parse(s)
     }
 
     /// 获取优先级（数值越小优先级越高）
@@ -35,12 +41,6 @@ impl UsageSource {
             UsageSource::ProviderReported => 1,
             UsageSource::GatewayAccumulated => 2,
         }
-    }
-}
-
-impl Default for UsageSource {
-    fn default() -> Self {
-        UsageSource::GatewayAccumulated
     }
 }
 

@@ -70,9 +70,9 @@ impl DistributionRecord {
             RETURNING *
             "#,
         )
-        .bind(&req.usage_log_id)
-        .bind(&req.tenant_id)
-        .bind(&req.beneficiary_id)
+        .bind(req.usage_log_id)
+        .bind(req.tenant_id)
+        .bind(req.beneficiary_id)
         .bind(&req.share_amount)
         .bind(&req.share_ratio)
         .bind(&req.level)
