@@ -113,12 +113,12 @@ async fn create_test_tenant(pool: &PgPool, suffix: &str, test_id: &str) -> Tenan
 }
 
 /// 创建测试用户
-async fn create_test_user(pool: &PgPool, tenant_id: Uuid, suffix: &str) -> User {
+async fn create_test_user(pool: &PgPool, tenant_id: Uuid, suffix: &str, test_id: &str) -> User {
     User::create(
         pool,
         &CreateUserRequest {
             tenant_id,
-            email: format!("test-{}@example.com", suffix),
+            email: format!("test-{}-{}@example.com", suffix, test_id),
             name: Some(format!("Test User {}", suffix)),
             role: Some("user".to_string()),
         },
@@ -337,7 +337,7 @@ async fn test_user_crud() {
 
     // 1. 创建租户和用户
     let tenant = create_test_tenant(&pool, "user-crud", &test_id).await;
-    let user = create_test_user(&pool, tenant.id, "user-crud").await;
+    let user = create_test_user(&pool, tenant.id, "user-crud", &test_id).await;
 
     chain.add_step(
         "keycompute-db",
@@ -427,7 +427,7 @@ async fn test_api_key_operations() {
 
     // 1. 创建租户和用户
     let tenant = create_test_tenant(&pool, "apikey", &test_id).await;
-    let user = create_test_user(&pool, tenant.id, "apikey").await;
+    let user = create_test_user(&pool, tenant.id, "apikey", &test_id).await;
 
     // 2. 创建 API Key
     let key_hash = format!("hash-{}", Uuid::new_v4().simple());
@@ -519,7 +519,7 @@ async fn test_usage_log_operations() {
 
     // 1. 创建测试数据
     let tenant = create_test_tenant(&pool, "usage", &test_id).await;
-    let user = create_test_user(&pool, tenant.id, "usage").await;
+    let user = create_test_user(&pool, tenant.id, "usage", &test_id).await;
     let key_hash = format!("hash-usage-{}", Uuid::new_v4().simple());
     let api_key = ProduceAiKey::create(
         &pool,
@@ -668,8 +668,8 @@ async fn test_multi_tenant_isolation() {
     );
 
     // 2. 每个租户创建用户
-    let user1 = create_test_user(&pool, tenant1.id, "isolation-1").await;
-    let user2 = create_test_user(&pool, tenant2.id, "isolation-2").await;
+    let user1 = create_test_user(&pool, tenant1.id, "isolation-1", &test_id).await;
+    let user2 = create_test_user(&pool, tenant2.id, "isolation-2", &test_id).await;
 
     chain.add_step(
         "keycompute-db",
@@ -908,7 +908,7 @@ async fn test_full_business_chain() {
     );
 
     // 2. 创建用户
-    let user = create_test_user(&pool, tenant.id, "full-chain").await;
+    let user = create_test_user(&pool, tenant.id, "full-chain", &test_id).await;
     chain.add_step(
         "keycompute-db",
         "step2_user",
