@@ -59,29 +59,59 @@ async fn create_test_pool() -> PgPool {
     pool
 }
 
-/// 清理测试数据
-async fn cleanup_test_data(pool: &PgPool) {
-    // 按依赖顺序删除
-    let _ = sqlx::query("DELETE FROM distribution_records")
+/// 测试数据隔离标识符，用于区分不同测试运行的数据
+/// 每个测试实例使用唯一的 run_id 来隔离数据，避免并行测试冲突
+fn get_test_run_id() -> String {
+    use std::sync::Mutex;
+    use std::sync::OnceLock;
+
+    static RUN_ID: OnceLock<Mutex<String>> = OnceLock::new();
+
+    RUN_ID
+        .get_or_init(|| Mutex::new(Uuid::new_v4().simple().to_string()))
+        .lock()
+        .unwrap()
+        .clone()
+}
+
+/// 清理特定测试运行的数据
+async fn cleanup_test_data(pool: &PgPool, run_id: &str) {
+    // 按依赖顺序删除 - 只删除当前测试运行的数据
+    let _ = sqlx::query("DELETE FROM distribution_records WHERE tenant_id IN (SELECT id FROM tenants WHERE slug LIKE $1)")
+        .bind(format!("test-%-{}", run_id))
         .execute(pool)
         .await;
-    let _ = sqlx::query("DELETE FROM usage_logs").execute(pool).await;
-    let _ = sqlx::query("DELETE FROM produce_ai_keys")
+    let _ = sqlx::query(
+        "DELETE FROM usage_logs WHERE tenant_id IN (SELECT id FROM tenants WHERE slug LIKE $1)",
+    )
+    .bind(format!("test-%-{}", run_id))
+    .execute(pool)
+    .await;
+    let _ = sqlx::query("DELETE FROM produce_ai_keys WHERE tenant_id IN (SELECT id FROM tenants WHERE slug LIKE $1)")
+        .bind(format!("test-%-{}", run_id))
         .execute(pool)
         .await;
-    let _ = sqlx::query("DELETE FROM users").execute(pool).await;
-    let _ = sqlx::query("DELETE FROM tenants WHERE slug LIKE 'test-%'")
+    let _ = sqlx::query(
+        "DELETE FROM users WHERE tenant_id IN (SELECT id FROM tenants WHERE slug LIKE $1)",
+    )
+    .bind(format!("test-%-{}", run_id))
+    .execute(pool)
+    .await;
+    let _ = sqlx::query("DELETE FROM tenants WHERE slug LIKE $1")
+        .bind(format!("test-%-{}", run_id))
         .execute(pool)
         .await;
 }
 
 /// 创建测试租户
+/// 使用 run_id 确保数据隔离，避免并行测试冲突
 async fn create_test_tenant(pool: &PgPool, suffix: &str) -> Tenant {
+    let run_id = get_test_run_id();
     Tenant::create(
         pool,
         &CreateTenantRequest {
             name: format!("Test Tenant {}", suffix),
-            slug: format!("test-tenant-{}", suffix),
+            slug: format!("test-tenant-{}-{}", suffix, run_id),
             description: Some(format!("Test tenant for {}", suffix)),
             default_rpm_limit: Some(100),
             default_tpm_limit: Some(50000),
@@ -198,7 +228,8 @@ async fn test_tenant_crud() {
     let mut chain = VerificationChain::new();
 
     let pool = create_test_pool().await;
-    cleanup_test_data(&pool).await;
+    let run_id = get_test_run_id();
+    cleanup_test_data(&pool, &run_id).await;
 
     // 1. 创建租户
     let tenant = create_test_tenant(&pool, "crud").await;
@@ -219,7 +250,7 @@ async fn test_tenant_crud() {
     );
 
     // 3. 查找租户 (by slug)
-    let found_by_slug = Tenant::find_by_slug(&pool, "test-tenant-crud").await;
+    let found_by_slug = Tenant::find_by_slug(&pool, &tenant.slug).await;
     chain.add_step(
         "keycompute-db",
         "Tenant::find_by_slug",
@@ -311,7 +342,8 @@ async fn test_user_crud() {
     let mut chain = VerificationChain::new();
 
     let pool = create_test_pool().await;
-    cleanup_test_data(&pool).await;
+    let run_id = get_test_run_id();
+    cleanup_test_data(&pool, &run_id).await;
 
     // 1. 创建租户和用户
     let tenant = create_test_tenant(&pool, "user-crud").await;
@@ -400,7 +432,8 @@ async fn test_api_key_operations() {
     let mut chain = VerificationChain::new();
 
     let pool = create_test_pool().await;
-    cleanup_test_data(&pool).await;
+    let run_id = get_test_run_id();
+    cleanup_test_data(&pool, &run_id).await;
 
     // 1. 创建租户和用户
     let tenant = create_test_tenant(&pool, "apikey").await;
@@ -491,7 +524,8 @@ async fn test_usage_log_operations() {
     let mut chain = VerificationChain::new();
 
     let pool = create_test_pool().await;
-    cleanup_test_data(&pool).await;
+    let run_id = get_test_run_id();
+    cleanup_test_data(&pool, &run_id).await;
 
     // 1. 创建测试数据
     let tenant = create_test_tenant(&pool, "usage").await;
@@ -629,7 +663,8 @@ async fn test_multi_tenant_isolation() {
     let mut chain = VerificationChain::new();
 
     let pool = create_test_pool().await;
-    cleanup_test_data(&pool).await;
+    let run_id = get_test_run_id();
+    cleanup_test_data(&pool, &run_id).await;
 
     // 1. 创建两个租户
     let tenant1 = create_test_tenant(&pool, "isolation-1").await;
@@ -705,7 +740,8 @@ async fn test_concurrent_operations() {
     let mut chain = VerificationChain::new();
 
     let pool = create_test_pool().await;
-    cleanup_test_data(&pool).await;
+    let run_id = get_test_run_id();
+    cleanup_test_data(&pool, &run_id).await;
 
     // 1. 创建租户
     let tenant = create_test_tenant(&pool, "concurrent").await;
@@ -780,9 +816,11 @@ async fn test_database_transaction() {
     let mut chain = VerificationChain::new();
 
     let pool = create_test_pool().await;
-    cleanup_test_data(&pool).await;
+    let run_id = get_test_run_id();
+    cleanup_test_data(&pool, &run_id).await;
 
     // 1. 测试事务提交
+    let tx_slug = format!("test-tx-tenant-{}", run_id);
     let tenant_id = {
         let mut tx = pool.begin().await.expect("Failed to begin transaction");
 
@@ -790,7 +828,7 @@ async fn test_database_transaction() {
             "INSERT INTO tenants (name, slug) VALUES ($1, $2) RETURNING *",
         )
         .bind("Transaction Test Tenant")
-        .bind("test-tx-tenant")
+        .bind(&tx_slug)
         .fetch_one(&mut *tx)
         .await;
 
@@ -817,12 +855,13 @@ async fn test_database_transaction() {
     );
 
     // 2. 测试事务回滚
+    let rollback_slug = format!("test-rollback-tenant-{}", run_id);
     {
         let mut tx = pool.begin().await.expect("Failed to begin transaction");
 
         let _ = sqlx::query("INSERT INTO tenants (name, slug) VALUES ($1, $2)")
             .bind("Rollback Test Tenant")
-            .bind("test-rollback-tenant")
+            .bind(&rollback_slug)
             .execute(&mut *tx)
             .await;
 
@@ -831,7 +870,7 @@ async fn test_database_transaction() {
     }
 
     // 验证回滚后数据不存在
-    let found = Tenant::find_by_slug(&pool, "test-rollback-tenant").await;
+    let found = Tenant::find_by_slug(&pool, &rollback_slug).await;
     chain.add_step(
         "keycompute-db",
         "verify_rolled_back",
@@ -853,7 +892,8 @@ async fn test_full_business_chain() {
     let mut chain = VerificationChain::new();
 
     let pool = create_test_pool().await;
-    cleanup_test_data(&pool).await;
+    let run_id = get_test_run_id();
+    cleanup_test_data(&pool, &run_id).await;
 
     // 1. 创建租户
     let tenant = create_test_tenant(&pool, "full-chain").await;
