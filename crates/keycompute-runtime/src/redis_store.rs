@@ -253,9 +253,15 @@ impl Default for RedisPoolConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
 
     fn create_test_store() -> Option<RedisRuntimeStore> {
-        match RedisRuntimeStore::new("redis://127.0.0.1:6379") {
+        let test_id = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
+        let prefix = format!("keycompute:test:{}", test_id);
+
+        match RedisRuntimeStore::with_prefix("redis://127.0.0.1:6379", prefix) {
             Ok(store) => Some(store),
             Err(_) => {
                 eprintln!("Warning: Redis not available, skipping Redis tests");
