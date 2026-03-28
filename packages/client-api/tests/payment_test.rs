@@ -39,7 +39,9 @@ async fn test_create_payment_order_success() {
         .await;
 
     let req = CreatePaymentOrderRequest::new(10.0, "USD", "alipay");
-    let result = payment_api.create_payment_order(&req, fixtures::TEST_ACCESS_TOKEN).await;
+    let result = payment_api
+        .create_payment_order(&req, fixtures::TEST_ACCESS_TOKEN)
+        .await;
 
     assert!(result.is_ok());
     let order = result.unwrap();
@@ -78,9 +80,11 @@ async fn test_create_payment_order_with_description() {
         .mount(&mock_server)
         .await;
 
-    let req = CreatePaymentOrderRequest::new(50.0, "USD", "wechat")
-        .with_description("Account recharge");
-    let result = payment_api.create_payment_order(&req, fixtures::TEST_ACCESS_TOKEN).await;
+    let req =
+        CreatePaymentOrderRequest::new(50.0, "USD", "wechat").with_description("Account recharge");
+    let result = payment_api
+        .create_payment_order(&req, fixtures::TEST_ACCESS_TOKEN)
+        .await;
 
     assert!(result.is_ok());
     let order = result.unwrap();
@@ -101,7 +105,9 @@ async fn test_create_payment_order_invalid_amount() {
         .await;
 
     let req = CreatePaymentOrderRequest::new(-5.0, "USD", "alipay");
-    let result = payment_api.create_payment_order(&req, fixtures::TEST_ACCESS_TOKEN).await;
+    let result = payment_api
+        .create_payment_order(&req, fixtures::TEST_ACCESS_TOKEN)
+        .await;
 
     assert!(result.is_err());
 }
@@ -134,7 +140,9 @@ async fn test_list_my_payment_orders_success() {
         .mount(&mock_server)
         .await;
 
-    let result = payment_api.list_my_payment_orders(None, fixtures::TEST_ACCESS_TOKEN).await;
+    let result = payment_api
+        .list_my_payment_orders(None, fixtures::TEST_ACCESS_TOKEN)
+        .await;
 
     assert!(result.is_ok());
     let orders = result.unwrap();
@@ -154,11 +162,11 @@ async fn test_list_my_payment_orders_with_status_filter() {
         .mount(&mock_server)
         .await;
 
-    let params = PaymentQueryParams::new()
-        .with_status("paid")
-        .with_limit(5);
+    let params = PaymentQueryParams::new().with_status("paid").with_limit(5);
 
-    let result = payment_api.list_my_payment_orders(Some(&params), fixtures::TEST_ACCESS_TOKEN).await;
+    let result = payment_api
+        .list_my_payment_orders(Some(&params), fixtures::TEST_ACCESS_TOKEN)
+        .await;
 
     assert!(result.is_ok());
     assert!(result.unwrap().is_empty());
@@ -186,7 +194,9 @@ async fn test_get_payment_order_success() {
         .mount(&mock_server)
         .await;
 
-    let result = payment_api.get_payment_order("order_001", fixtures::TEST_ACCESS_TOKEN).await;
+    let result = payment_api
+        .get_payment_order("order_001", fixtures::TEST_ACCESS_TOKEN)
+        .await;
 
     assert!(result.is_ok());
     let order = result.unwrap();
@@ -207,7 +217,9 @@ async fn test_get_payment_order_not_found() {
         .mount(&mock_server)
         .await;
 
-    let result = payment_api.get_payment_order("nonexistent", fixtures::TEST_ACCESS_TOKEN).await;
+    let result = payment_api
+        .get_payment_order("nonexistent", fixtures::TEST_ACCESS_TOKEN)
+        .await;
 
     assert!(matches!(result.unwrap_err(), ClientError::NotFound(_)));
 }
@@ -234,7 +246,9 @@ async fn test_sync_payment_order_success() {
         .mount(&mock_server)
         .await;
 
-    let result = payment_api.sync_payment_order("PAY202401200001", fixtures::TEST_ACCESS_TOKEN).await;
+    let result = payment_api
+        .sync_payment_order("PAY202401200001", fixtures::TEST_ACCESS_TOKEN)
+        .await;
 
     assert!(result.is_ok());
     let order = result.unwrap();
@@ -256,7 +270,9 @@ async fn test_get_my_balance_success() {
         .mount(&mock_server)
         .await;
 
-    let result = payment_api.get_my_balance(fixtures::TEST_ACCESS_TOKEN).await;
+    let result = payment_api
+        .get_my_balance(fixtures::TEST_ACCESS_TOKEN)
+        .await;
 
     assert!(result.is_ok());
     let balance = result.unwrap();
@@ -280,7 +296,9 @@ async fn test_get_my_balance_zero() {
         .mount(&mock_server)
         .await;
 
-    let result = payment_api.get_my_balance(fixtures::TEST_ACCESS_TOKEN).await;
+    let result = payment_api
+        .get_my_balance(fixtures::TEST_ACCESS_TOKEN)
+        .await;
 
     assert!(result.is_ok());
     assert_eq!(result.unwrap().balance, 0.0);

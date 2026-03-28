@@ -78,7 +78,9 @@ async fn test_get_provider_health_success() {
         .mount(&mock_server)
         .await;
 
-    let result = debug_api.get_provider_health(fixtures::TEST_ACCESS_TOKEN).await;
+    let result = debug_api
+        .get_provider_health(fixtures::TEST_ACCESS_TOKEN)
+        .await;
 
     assert!(result.is_ok());
     let health = result.unwrap();
@@ -103,7 +105,9 @@ async fn test_get_gateway_status_success() {
         .mount(&mock_server)
         .await;
 
-    let result = debug_api.get_gateway_status(fixtures::TEST_ACCESS_TOKEN).await;
+    let result = debug_api
+        .get_gateway_status(fixtures::TEST_ACCESS_TOKEN)
+        .await;
 
     assert!(result.is_ok());
     let status = result.unwrap();
@@ -129,7 +133,9 @@ async fn test_get_gateway_stats_success() {
         .mount(&mock_server)
         .await;
 
-    let result = debug_api.get_gateway_stats(fixtures::TEST_ACCESS_TOKEN).await;
+    let result = debug_api
+        .get_gateway_stats(fixtures::TEST_ACCESS_TOKEN)
+        .await;
 
     assert!(result.is_ok());
     let stats = result.unwrap();
@@ -153,7 +159,9 @@ async fn test_check_provider_health_success() {
         .mount(&mock_server)
         .await;
 
-    let result = debug_api.check_provider_health(fixtures::TEST_ACCESS_TOKEN).await;
+    let result = debug_api
+        .check_provider_health(fixtures::TEST_ACCESS_TOKEN)
+        .await;
 
     assert!(result.is_ok());
     let check = result.unwrap();
@@ -193,7 +201,9 @@ async fn test_debug_endpoints_forbidden() {
         .mount(&mock_server)
         .await;
 
-    let result = debug_api.get_provider_health(fixtures::TEST_ACCESS_TOKEN).await;
+    let result = debug_api
+        .get_provider_health(fixtures::TEST_ACCESS_TOKEN)
+        .await;
 
     assert!(matches!(result.unwrap_err(), ClientError::Forbidden(_)));
 }

@@ -8,12 +8,13 @@ use wiremock::MockServer;
 /// 创建带 Mock 服务器的测试客户端
 pub async fn create_test_client() -> (ApiClient, MockServer) {
     let mock_server = MockServer::start().await;
-    let config = ClientConfig::new(&mock_server.uri());
+    let config = ClientConfig::new(mock_server.uri());
     let client = ApiClient::new(config).expect("Failed to create client");
     (client, mock_server)
 }
 
 /// 测试用常量
+#[allow(dead_code)]
 pub mod fixtures {
     pub const TEST_ACCESS_TOKEN: &str = "test_access_token_12345";
     pub const TEST_REFRESH_TOKEN: &str = "test_refresh_token_67890";

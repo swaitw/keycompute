@@ -40,7 +40,9 @@ async fn test_list_my_api_keys_success() {
         .mount(&mock_server)
         .await;
 
-    let result = api_key_api.list_my_api_keys(fixtures::TEST_ACCESS_TOKEN).await;
+    let result = api_key_api
+        .list_my_api_keys(fixtures::TEST_ACCESS_TOKEN)
+        .await;
 
     assert!(result.is_ok());
     let keys = result.unwrap();
@@ -62,7 +64,9 @@ async fn test_list_my_api_keys_empty() {
         .mount(&mock_server)
         .await;
 
-    let result = api_key_api.list_my_api_keys(fixtures::TEST_ACCESS_TOKEN).await;
+    let result = api_key_api
+        .list_my_api_keys(fixtures::TEST_ACCESS_TOKEN)
+        .await;
 
     assert!(result.is_ok());
     assert!(result.unwrap().is_empty());
@@ -111,7 +115,9 @@ async fn test_create_api_key_success() {
         .await;
 
     let req = CreateApiKeyRequest::new("New API Key");
-    let result = api_key_api.create_api_key(&req, fixtures::TEST_ACCESS_TOKEN).await;
+    let result = api_key_api
+        .create_api_key(&req, fixtures::TEST_ACCESS_TOKEN)
+        .await;
 
     assert!(result.is_ok());
     let resp = result.unwrap();
@@ -144,9 +150,10 @@ async fn test_create_api_key_with_expiration() {
         .mount(&mock_server)
         .await;
 
-    let req = CreateApiKeyRequest::new("Temporary Key")
-        .with_expires_at("2024-06-30T23:59:59Z");
-    let result = api_key_api.create_api_key(&req, fixtures::TEST_ACCESS_TOKEN).await;
+    let req = CreateApiKeyRequest::new("Temporary Key").with_expires_at("2024-06-30T23:59:59Z");
+    let result = api_key_api
+        .create_api_key(&req, fixtures::TEST_ACCESS_TOKEN)
+        .await;
 
     assert!(result.is_ok());
     let resp = result.unwrap();
@@ -167,7 +174,9 @@ async fn test_create_api_key_duplicate_name() {
         .await;
 
     let req = CreateApiKeyRequest::new("Existing Key Name");
-    let result = api_key_api.create_api_key(&req, fixtures::TEST_ACCESS_TOKEN).await;
+    let result = api_key_api
+        .create_api_key(&req, fixtures::TEST_ACCESS_TOKEN)
+        .await;
 
     // 409 会被映射为 Http 错误
     assert!(result.is_err());
@@ -186,7 +195,9 @@ async fn test_delete_api_key_success() {
         .mount(&mock_server)
         .await;
 
-    let result = api_key_api.delete_api_key("key_001", fixtures::TEST_ACCESS_TOKEN).await;
+    let result = api_key_api
+        .delete_api_key("key_001", fixtures::TEST_ACCESS_TOKEN)
+        .await;
 
     assert!(result.is_ok());
     assert_eq!(result.unwrap().message, "API Key deleted successfully");
@@ -205,7 +216,9 @@ async fn test_delete_api_key_not_found() {
         .mount(&mock_server)
         .await;
 
-    let result = api_key_api.delete_api_key("nonexistent_key", fixtures::TEST_ACCESS_TOKEN).await;
+    let result = api_key_api
+        .delete_api_key("nonexistent_key", fixtures::TEST_ACCESS_TOKEN)
+        .await;
 
     assert!(matches!(result.unwrap_err(), ClientError::NotFound(_)));
 }
@@ -241,7 +254,9 @@ async fn test_delete_api_key_forbidden() {
         .mount(&mock_server)
         .await;
 
-    let result = api_key_api.delete_api_key("key_002", fixtures::TEST_ACCESS_TOKEN).await;
+    let result = api_key_api
+        .delete_api_key("key_002", fixtures::TEST_ACCESS_TOKEN)
+        .await;
 
     assert!(matches!(result.unwrap_err(), ClientError::Forbidden(_)));
 }

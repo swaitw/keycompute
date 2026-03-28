@@ -1,8 +1,6 @@
 //! OpenAI 兼容 API 模块集成测试
 
-use client_api::api::openai::{
-    ChatCompletionRequest, Message, OpenAiApi,
-};
+use client_api::api::openai::{ChatCompletionRequest, Message, OpenAiApi};
 use client_api::client::OpenAiClient;
 use client_api::config::ClientConfig;
 use wiremock::matchers::{body_json, method, path};
@@ -11,7 +9,7 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 /// 创建 OpenAI 测试客户端
 async fn create_openai_test_client() -> (OpenAiClient, MockServer) {
     let mock_server = MockServer::start().await;
-    let config = ClientConfig::new(&mock_server.uri());
+    let config = ClientConfig::new(mock_server.uri());
     let client = OpenAiClient::new(config).expect("Failed to create OpenAI client");
     (client, mock_server)
 }
@@ -21,15 +19,14 @@ async fn test_chat_completions_success() {
     let (client, mock_server) = create_openai_test_client().await;
     let openai_api = OpenAiApi::new(&client);
 
+    // 注意：ChatCompletionRequest 使用 skip_serializing_if = "Option::is_none"
+    // 所以当字段为 None 时，不会被序列化到 JSON 中
     let expected_body = serde_json::json!({
         "model": "gpt-4",
         "messages": [
             {"role": "system", "content": "You are a helpful assistant."},
             {"role": "user", "content": "Hello!"}
-        ],
-        "temperature": null,
-        "max_tokens": null,
-        "stream": null
+        ]
     });
 
     Mock::given(method("POST"))
@@ -105,9 +102,7 @@ async fn test_chat_completions_with_options() {
         .mount(&mock_server)
         .await;
 
-    let messages = vec![
-        Message::user("Be creative!"),
-    ];
+    let messages = vec![Message::user("Be creative!")];
     let req = ChatCompletionRequest::new("gpt-3.5-turbo", messages)
         .with_temperature(0.9)
         .with_max_tokens(100);
@@ -200,7 +195,9 @@ async fn test_retrieve_model_not_found() {
         .mount(&mock_server)
         .await;
 
-    let result = openai_api.retrieve_model("nonexistent-model", "sk-test-api-key").await;
+    let result = openai_api
+        .retrieve_model("nonexistent-model", "sk-test-api-key")
+        .await;
 
     assert!(result.is_err());
 }

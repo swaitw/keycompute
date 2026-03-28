@@ -40,7 +40,9 @@ async fn test_get_my_usage_success() {
         .mount(&mock_server)
         .await;
 
-    let result = usage_api.get_my_usage(None, fixtures::TEST_ACCESS_TOKEN).await;
+    let result = usage_api
+        .get_my_usage(None, fixtures::TEST_ACCESS_TOKEN)
+        .await;
 
     assert!(result.is_ok());
     let records = result.unwrap();
@@ -62,10 +64,10 @@ async fn test_get_my_usage_with_pagination() {
         .mount(&mock_server)
         .await;
 
-    let params = UsageQueryParams::new()
-        .with_limit(10)
-        .with_offset(20);
-    let result = usage_api.get_my_usage(Some(&params), fixtures::TEST_ACCESS_TOKEN).await;
+    let params = UsageQueryParams::new().with_limit(10).with_offset(20);
+    let result = usage_api
+        .get_my_usage(Some(&params), fixtures::TEST_ACCESS_TOKEN)
+        .await;
 
     assert!(result.is_ok());
     assert!(result.unwrap().is_empty());
@@ -98,7 +100,9 @@ async fn test_get_my_usage_with_date_range() {
     let params = UsageQueryParams::new()
         .with_start_date("2024-01-01")
         .with_end_date("2024-01-31");
-    let result = usage_api.get_my_usage(Some(&params), fixtures::TEST_ACCESS_TOKEN).await;
+    let result = usage_api
+        .get_my_usage(Some(&params), fixtures::TEST_ACCESS_TOKEN)
+        .await;
 
     assert!(result.is_ok());
     assert_eq!(result.unwrap().len(), 1);

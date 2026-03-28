@@ -1,8 +1,6 @@
 //! 用户自服务模块集成测试
 
-use client_api::api::user::{
-    ChangePasswordRequest, UpdateProfileRequest, UserApi,
-};
+use client_api::api::user::{ChangePasswordRequest, UpdateProfileRequest, UserApi};
 use client_api::error::ClientError;
 use wiremock::matchers::{body_json, method, path};
 use wiremock::{Mock, ResponseTemplate};
@@ -83,7 +81,9 @@ async fn test_update_profile_success() {
         .await;
 
     let req = UpdateProfileRequest::new().with_name("Updated Name");
-    let result = user_api.update_profile(&req, fixtures::TEST_ACCESS_TOKEN).await;
+    let result = user_api
+        .update_profile(&req, fixtures::TEST_ACCESS_TOKEN)
+        .await;
 
     assert!(result.is_ok());
     let user = result.unwrap();
@@ -115,7 +115,9 @@ async fn test_update_profile_clear_name() {
         .await;
 
     let req = UpdateProfileRequest::new(); // name is None
-    let result = user_api.update_profile(&req, fixtures::TEST_ACCESS_TOKEN).await;
+    let result = user_api
+        .update_profile(&req, fixtures::TEST_ACCESS_TOKEN)
+        .await;
 
     assert!(result.is_ok());
     assert_eq!(result.unwrap().name, None);
@@ -141,7 +143,9 @@ async fn test_change_password_success() {
         .await;
 
     let req = ChangePasswordRequest::new("OldPass123!", "NewPass456!");
-    let result = user_api.change_password(&req, fixtures::TEST_ACCESS_TOKEN).await;
+    let result = user_api
+        .change_password(&req, fixtures::TEST_ACCESS_TOKEN)
+        .await;
 
     assert!(result.is_ok());
     assert_eq!(result.unwrap().message, "Password changed successfully");
@@ -161,7 +165,9 @@ async fn test_change_password_wrong_current() {
         .await;
 
     let req = ChangePasswordRequest::new("WrongPass!", "NewPass456!");
-    let result = user_api.change_password(&req, fixtures::TEST_ACCESS_TOKEN).await;
+    let result = user_api
+        .change_password(&req, fixtures::TEST_ACCESS_TOKEN)
+        .await;
 
     assert!(result.is_err());
 }

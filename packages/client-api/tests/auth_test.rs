@@ -3,8 +3,8 @@
 //! 使用 Wiremock 模拟后端服务，无需启动真实服务器
 
 use client_api::api::auth::{
-    AuthApi, ForgotPasswordRequest, LoginRequest, RegisterRequest, ResetPasswordRequest,
-    RefreshTokenRequest, ResendVerificationRequest,
+    AuthApi, ForgotPasswordRequest, LoginRequest, RefreshTokenRequest, RegisterRequest,
+    ResendVerificationRequest, ResetPasswordRequest,
 };
 use client_api::error::ClientError;
 use wiremock::matchers::{body_json, method, path};
@@ -96,8 +96,7 @@ async fn test_register_success() {
         .mount(&mock_server)
         .await;
 
-    let req = RegisterRequest::new("new@example.com", "SecurePass123!")
-        .with_name("New User");
+    let req = RegisterRequest::new("new@example.com", "SecurePass123!").with_name("New User");
     let result = auth_api.register(&req).await;
 
     assert!(result.is_ok());

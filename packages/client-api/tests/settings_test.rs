@@ -27,7 +27,9 @@ async fn test_get_system_settings_success() {
         .mount(&mock_server)
         .await;
 
-    let result = settings_api.get_system_settings(fixtures::TEST_ACCESS_TOKEN).await;
+    let result = settings_api
+        .get_system_settings(fixtures::TEST_ACCESS_TOKEN)
+        .await;
 
     assert!(result.is_ok());
     let settings = result.unwrap();
@@ -69,9 +71,7 @@ async fn test_get_system_setting_by_key_success() {
 
     Mock::given(method("GET"))
         .and(path("/api/v1/settings/site_name"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!(
-            "KeyCompute"
-        )))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!("KeyCompute")))
         .mount(&mock_server)
         .await;
 
@@ -89,14 +89,16 @@ async fn test_update_system_setting_by_key_success() {
 
     Mock::given(method("PUT"))
         .and(path("/api/v1/settings/site_name"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!(
-            "New Site Name"
-        )))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!("New Site Name")))
         .mount(&mock_server)
         .await;
 
     let result = settings_api
-        .update_system_setting_by_key("site_name", &serde_json::json!("New Site Name"), fixtures::TEST_ACCESS_TOKEN)
+        .update_system_setting_by_key(
+            "site_name",
+            &serde_json::json!("New Site Name"),
+            fixtures::TEST_ACCESS_TOKEN,
+        )
         .await;
 
     assert!(result.is_ok());
@@ -133,7 +135,9 @@ async fn test_get_system_settings_forbidden() {
         .mount(&mock_server)
         .await;
 
-    let result = settings_api.get_system_settings(fixtures::TEST_ACCESS_TOKEN).await;
+    let result = settings_api
+        .get_system_settings(fixtures::TEST_ACCESS_TOKEN)
+        .await;
 
     assert!(matches!(result.unwrap_err(), ClientError::Forbidden(_)));
 }

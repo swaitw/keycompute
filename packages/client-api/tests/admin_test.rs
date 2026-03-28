@@ -45,7 +45,9 @@ async fn test_list_all_users_success() {
         .mount(&mock_server)
         .await;
 
-    let result = admin_api.list_all_users(None, fixtures::TEST_ACCESS_TOKEN).await;
+    let result = admin_api
+        .list_all_users(None, fixtures::TEST_ACCESS_TOKEN)
+        .await;
 
     assert!(result.is_ok());
     let users = result.unwrap();
@@ -74,7 +76,9 @@ async fn test_get_user_by_id_success() {
         .mount(&mock_server)
         .await;
 
-    let result = admin_api.get_user_by_id("user_001", fixtures::TEST_ACCESS_TOKEN).await;
+    let result = admin_api
+        .get_user_by_id("user_001", fixtures::TEST_ACCESS_TOKEN)
+        .await;
 
     assert!(result.is_ok());
     let user = result.unwrap();
@@ -102,8 +106,12 @@ async fn test_update_user_success() {
         .mount(&mock_server)
         .await;
 
-    let req = UpdateUserRequest::new().with_name("Updated Name").with_role("admin");
-    let result = admin_api.update_user("user_001", &req, fixtures::TEST_ACCESS_TOKEN).await;
+    let req = UpdateUserRequest::new()
+        .with_name("Updated Name")
+        .with_role("admin");
+    let result = admin_api
+        .update_user("user_001", &req, fixtures::TEST_ACCESS_TOKEN)
+        .await;
 
     assert!(result.is_ok());
     let user = result.unwrap();
@@ -123,7 +131,9 @@ async fn test_delete_user_success() {
         .mount(&mock_server)
         .await;
 
-    let result = admin_api.delete_user("user_001", fixtures::TEST_ACCESS_TOKEN).await;
+    let result = admin_api
+        .delete_user("user_001", fixtures::TEST_ACCESS_TOKEN)
+        .await;
 
     assert!(result.is_ok());
     assert_eq!(result.unwrap().message, "User deleted successfully");
@@ -145,7 +155,9 @@ async fn test_update_user_balance_success() {
         .await;
 
     let req = UpdateBalanceRequest::add(50.0);
-    let result = admin_api.update_user_balance("user_001", &req, fixtures::TEST_ACCESS_TOKEN).await;
+    let result = admin_api
+        .update_user_balance("user_001", &req, fixtures::TEST_ACCESS_TOKEN)
+        .await;
 
     assert!(result.is_ok(), "Expected Ok, got {:?}", result);
     assert_eq!(result.unwrap().balance, 150.0);
@@ -183,7 +195,9 @@ async fn test_list_accounts_success() {
         .mount(&mock_server)
         .await;
 
-    let result = admin_api.list_accounts(None, fixtures::TEST_ACCESS_TOKEN).await;
+    let result = admin_api
+        .list_accounts(None, fixtures::TEST_ACCESS_TOKEN)
+        .await;
 
     assert!(result.is_ok(), "Expected Ok, got {:?}", result);
     let accounts = result.unwrap();
@@ -211,7 +225,9 @@ async fn test_create_account_success() {
         .await;
 
     let req = CreateAccountRequest::new("New Gemini Account", "gemini", "api_key_here");
-    let result = admin_api.create_account(&req, fixtures::TEST_ACCESS_TOKEN).await;
+    let result = admin_api
+        .create_account(&req, fixtures::TEST_ACCESS_TOKEN)
+        .await;
 
     assert!(result.is_ok(), "Expected Ok, got {:?}", result);
     assert_eq!(result.unwrap().provider, "gemini");
@@ -230,7 +246,9 @@ async fn test_delete_account_success() {
         .mount(&mock_server)
         .await;
 
-    let result = admin_api.delete_account("account_001", fixtures::TEST_ACCESS_TOKEN).await;
+    let result = admin_api
+        .delete_account("account_001", fixtures::TEST_ACCESS_TOKEN)
+        .await;
 
     assert!(result.is_ok());
 }
@@ -295,7 +313,9 @@ async fn test_create_pricing_success() {
         .await;
 
     let req = CreatePricingRequest::new("claude-3-opus", 0.015, 0.075, "USD");
-    let result = admin_api.create_pricing(&req, fixtures::TEST_ACCESS_TOKEN).await;
+    let result = admin_api
+        .create_pricing(&req, fixtures::TEST_ACCESS_TOKEN)
+        .await;
 
     assert!(result.is_ok(), "Expected Ok, got {:?}", result);
     assert_eq!(result.unwrap().model, "claude-3-opus");
@@ -314,7 +334,9 @@ async fn test_delete_pricing_success() {
         .mount(&mock_server)
         .await;
 
-    let result = admin_api.delete_pricing("pricing_001", fixtures::TEST_ACCESS_TOKEN).await;
+    let result = admin_api
+        .delete_pricing("pricing_001", fixtures::TEST_ACCESS_TOKEN)
+        .await;
 
     assert!(result.is_ok());
 }
@@ -343,7 +365,9 @@ async fn test_calculate_cost_success() {
         input_tokens: 1000,
         output_tokens: 500,
     };
-    let result = admin_api.calculate_cost(&req, fixtures::TEST_ACCESS_TOKEN).await;
+    let result = admin_api
+        .calculate_cost(&req, fixtures::TEST_ACCESS_TOKEN)
+        .await;
 
     assert!(result.is_ok());
     let cost = result.unwrap();
@@ -382,7 +406,9 @@ async fn test_list_all_payment_orders_success() {
         .mount(&mock_server)
         .await;
 
-    let result = admin_api.list_all_payment_orders(None, fixtures::TEST_ACCESS_TOKEN).await;
+    let result = admin_api
+        .list_all_payment_orders(None, fixtures::TEST_ACCESS_TOKEN)
+        .await;
 
     assert!(result.is_ok());
     let orders = result.unwrap();
@@ -423,7 +449,9 @@ async fn test_admin_endpoints_forbidden() {
         .mount(&mock_server)
         .await;
 
-    let result = admin_api.list_accounts(None, fixtures::TEST_ACCESS_TOKEN).await;
+    let result = admin_api
+        .list_accounts(None, fixtures::TEST_ACCESS_TOKEN)
+        .await;
 
     assert!(matches!(result.unwrap_err(), ClientError::Forbidden(_)));
 }

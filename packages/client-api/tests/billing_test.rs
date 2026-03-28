@@ -40,7 +40,9 @@ async fn test_list_billing_records_success() {
         .mount(&mock_server)
         .await;
 
-    let result = billing_api.list_billing_records(None, fixtures::TEST_ACCESS_TOKEN).await;
+    let result = billing_api
+        .list_billing_records(None, fixtures::TEST_ACCESS_TOKEN)
+        .await;
 
     assert!(result.is_ok());
     let records = result.unwrap();
@@ -68,7 +70,9 @@ async fn test_list_billing_records_with_filters() {
         .with_end_date("2024-01-31")
         .with_limit(10);
 
-    let result = billing_api.list_billing_records(Some(&params), fixtures::TEST_ACCESS_TOKEN).await;
+    let result = billing_api
+        .list_billing_records(Some(&params), fixtures::TEST_ACCESS_TOKEN)
+        .await;
 
     assert!(result.is_ok());
 }
@@ -86,7 +90,9 @@ async fn test_list_billing_records_unauthorized() {
         .mount(&mock_server)
         .await;
 
-    let result = billing_api.list_billing_records(None, "invalid_token").await;
+    let result = billing_api
+        .list_billing_records(None, "invalid_token")
+        .await;
 
     assert!(matches!(result.unwrap_err(), ClientError::Unauthorized(_)));
 }
@@ -108,7 +114,9 @@ async fn test_get_billing_stats_success() {
         .mount(&mock_server)
         .await;
 
-    let result = billing_api.get_billing_stats(fixtures::TEST_ACCESS_TOKEN).await;
+    let result = billing_api
+        .get_billing_stats(fixtures::TEST_ACCESS_TOKEN)
+        .await;
 
     assert!(result.is_ok());
     let stats = result.unwrap();
@@ -134,7 +142,9 @@ async fn test_get_billing_stats_new_user() {
         .mount(&mock_server)
         .await;
 
-    let result = billing_api.get_billing_stats(fixtures::TEST_ACCESS_TOKEN).await;
+    let result = billing_api
+        .get_billing_stats(fixtures::TEST_ACCESS_TOKEN)
+        .await;
 
     assert!(result.is_ok());
     let stats = result.unwrap();

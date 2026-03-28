@@ -71,9 +71,7 @@ async fn test_404_not_found() {
         .mount(&mock_server)
         .await;
 
-    let result: Result<serde_json::Value, _> = client
-        .get_json("/api/v1/nonexistent", None)
-        .await;
+    let result: Result<serde_json::Value, _> = client.get_json("/api/v1/nonexistent", None).await;
 
     match result.unwrap_err() {
         ClientError::NotFound(msg) => {
@@ -90,11 +88,13 @@ async fn test_429_rate_limited() {
 
     Mock::given(method("POST"))
         .and(path("/auth/login"))
-        .respond_with(ResponseTemplate::new(429)
-            .insert_header("Retry-After", "60")
-            .set_body_json(serde_json::json!({
-                "error": "Too many requests"
-            })))
+        .respond_with(
+            ResponseTemplate::new(429)
+                .insert_header("Retry-After", "60")
+                .set_body_json(serde_json::json!({
+                    "error": "Too many requests"
+                })),
+        )
         .mount(&mock_server)
         .await;
 
@@ -139,11 +139,13 @@ async fn test_503_service_unavailable() {
 
     Mock::given(method("GET"))
         .and(path("/health"))
-        .respond_with(ResponseTemplate::new(503)
-            .insert_header("Retry-After", "120")
-            .set_body_json(serde_json::json!({
-                "error": "Service temporarily unavailable"
-            })))
+        .respond_with(
+            ResponseTemplate::new(503)
+                .insert_header("Retry-After", "120")
+                .set_body_json(serde_json::json!({
+                    "error": "Service temporarily unavailable"
+                })),
+        )
         .mount(&mock_server)
         .await;
 
@@ -167,11 +169,13 @@ async fn test_network_timeout_simulation() {
     // 模拟延迟响应（超过客户端超时时间）
     Mock::given(method("GET"))
         .and(path("/health"))
-        .respond_with(ResponseTemplate::new(200)
-            .set_delay(Duration::from_secs(100)) // 很长的延迟
-            .set_body_json(serde_json::json!({
-                "status": "healthy"
-            })))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_delay(Duration::from_secs(100)) // 很长的延迟
+                .set_body_json(serde_json::json!({
+                    "status": "healthy"
+                })),
+        )
         .mount(&mock_server)
         .await;
 
@@ -189,14 +193,11 @@ async fn test_invalid_json_response() {
 
     Mock::given(method("GET"))
         .and(path("/api/v1/me"))
-        .respond_with(ResponseTemplate::new(200)
-            .set_body_string("not valid json {{{{"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("not valid json {{{{"))
         .mount(&mock_server)
         .await;
 
-    let result: Result<serde_json::Value, _> = client
-        .get_json("/api/v1/me", Some("token"))
-        .await;
+    let result: Result<serde_json::Value, _> = client.get_json("/api/v1/me", Some("token")).await;
 
     // reqwest 会将 JSON 解析错误包装为 Http 错误
     match result.unwrap_err() {

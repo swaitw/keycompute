@@ -41,7 +41,9 @@ async fn test_list_tenants_success() {
         .mount(&mock_server)
         .await;
 
-    let result = tenant_api.list_tenants(None, fixtures::TEST_ACCESS_TOKEN).await;
+    let result = tenant_api
+        .list_tenants(None, fixtures::TEST_ACCESS_TOKEN)
+        .await;
 
     assert!(result.is_ok());
     let tenants = result.unwrap();
@@ -62,7 +64,9 @@ async fn test_list_tenants_empty() {
         .mount(&mock_server)
         .await;
 
-    let result = tenant_api.list_tenants(None, fixtures::TEST_ACCESS_TOKEN).await;
+    let result = tenant_api
+        .list_tenants(None, fixtures::TEST_ACCESS_TOKEN)
+        .await;
 
     assert!(result.is_ok());
     assert!(result.unwrap().is_empty());
@@ -88,7 +92,9 @@ async fn test_list_tenants_with_pagination() {
         .await;
 
     let params = TenantQueryParams::new().with_limit(1).with_offset(3);
-    let result = tenant_api.list_tenants(Some(&params), fixtures::TEST_ACCESS_TOKEN).await;
+    let result = tenant_api
+        .list_tenants(Some(&params), fixtures::TEST_ACCESS_TOKEN)
+        .await;
 
     assert!(result.is_ok());
     assert_eq!(result.unwrap().len(), 1);
@@ -125,7 +131,9 @@ async fn test_list_tenants_forbidden() {
         .mount(&mock_server)
         .await;
 
-    let result = tenant_api.list_tenants(None, fixtures::TEST_ACCESS_TOKEN).await;
+    let result = tenant_api
+        .list_tenants(None, fixtures::TEST_ACCESS_TOKEN)
+        .await;
 
     assert!(matches!(result.unwrap_err(), ClientError::Forbidden(_)));
 }
