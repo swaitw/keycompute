@@ -1,5 +1,8 @@
 use dioxus::prelude::*;
 
+use crate::router::Route;
+use crate::services::auth_service;
+
 #[component]
 pub fn Register() -> Element {
     let mut name = use_signal(String::new);
@@ -8,6 +11,7 @@ pub fn Register() -> Element {
     let mut confirm_password = use_signal(String::new);
     let mut loading = use_signal(|| false);
     let mut error_msg = use_signal(|| Option::<String>::None);
+    let nav = use_navigator();
 
     let on_submit = move |evt: Event<FormData>| {
         evt.prevent_default();
@@ -21,9 +25,19 @@ pub fn Register() -> Element {
         }
         loading.set(true);
         error_msg.set(None);
+        let name_val = name();
+        let email_val = email();
+        let password_val = password();
         spawn(async move {
-            // TODO: call register service
-            loading.set(false);
+            match auth_service::register(&email_val, &password_val, Some(name_val.as_str())).await {
+                Ok(_) => {
+                    nav.push(Route::Login {});
+                }
+                Err(e) => {
+                    error_msg.set(Some(format!("注册失败：{e}")));
+                    loading.set(false);
+                }
+            }
         });
     };
 

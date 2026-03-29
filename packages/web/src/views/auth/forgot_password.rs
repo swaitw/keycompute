@@ -1,5 +1,7 @@
 use dioxus::prelude::*;
 
+use crate::services::auth_service;
+
 #[component]
 pub fn ForgotPassword() -> Element {
     let mut email = use_signal(String::new);
@@ -15,10 +17,18 @@ pub fn ForgotPassword() -> Element {
         }
         loading.set(true);
         error_msg.set(None);
+        let email_val = email();
         spawn(async move {
-            // TODO: call forgot password service
-            sent.set(true);
-            loading.set(false);
+            match auth_service::forgot_password(&email_val).await {
+                Ok(_) => {
+                    sent.set(true);
+                    loading.set(false);
+                }
+                Err(e) => {
+                    error_msg.set(Some(format!("发送失败：{e}")));
+                    loading.set(false);
+                }
+            }
         });
     };
 

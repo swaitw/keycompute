@@ -1,33 +1,56 @@
 use dioxus::prelude::*;
 
-#[derive(Clone, PartialEq)]
-struct ApiKeyItem {
-    id: String,
-    name: String,
-    prefix: String,
-    status: String,
-    created_at: String,
-}
+use crate::services::api_key_service;
+use crate::stores::auth_store::AuthStore;
 
 #[component]
 pub fn ApiKeyList() -> Element {
+    let auth_store = use_context::<AuthStore>();
     let mut show_create = use_signal(|| false);
     let mut new_key_name = use_signal(String::new);
-    let mut loading = use_signal(|| false);
+    let mut creating = use_signal(|| false);
+    let mut create_error = use_signal(|| Option::<String>::None);
+    let mut new_key_value = use_signal(|| Option::<String>::None); // 新建成功后展示一次完整 key
 
-    let keys = use_signal(Vec::<ApiKeyItem>::new);
+    // 拉取 key 列表
+    let mut keys = use_resource(move || async move {
+        let token = auth_store.token().unwrap_or_default();
+        api_key_service::list(&token).await
+    });
 
     let on_create = move |evt: Event<FormData>| {
         evt.prevent_default();
-        if new_key_name().is_empty() {
+        let name = new_key_name();
+        if name.is_empty() {
             return;
         }
-        loading.set(true);
+        creating.set(true);
+        create_error.set(None);
         spawn(async move {
-            // TODO: call api_key_service.create
-            loading.set(false);
-            show_create.set(false);
-            new_key_name.set(String::new());
+            let token = auth_store.token().unwrap_or_default();
+            match api_key_service::create(&name, &token).await {
+                Ok(resp) => {
+                    new_key_value.set(Some(resp.api_key));
+                    show_create.set(false);
+                    new_key_name.set(String::new());
+                    creating.set(false);
+                    // 重新拉取列表
+                    keys.restart();
+                }
+                Err(e) => {
+                    create_error.set(Some(format!("创建失败：{e}")));
+                    creating.set(false);
+                }
+            }
+        });
+    };
+
+    let on_delete = move |id: String| {
+        spawn(async move {
+            let token = auth_store.token().unwrap_or_default();
+            if api_key_service::delete(&id, &token).await.is_ok() {
+                keys.restart();
+            }
         });
     };
 
@@ -39,17 +62,38 @@ pub fn ApiKeyList() -> Element {
                 h1 { class: "page-title", "API Key 管理" }
                 button {
                     class: "btn btn-primary",
-                    onclick: move |_| show_create.set(true),
+                    onclick: move |_| {
+                        show_create.set(true);
+                        new_key_value.set(None);
+                    },
                     "+ 创建 API Key"
                 }
             }
 
+            // 新建成功后展示完整密钥（仅一次）
+            if let Some(key) = new_key_value() {
+                div {
+                    class: "alert alert-success",
+                    p { "API Key 已创建，请妥善保存（仅显示一次）：" }
+                    code { class: "key-display", "{key}" }
+                    button {
+                        class: "btn btn-sm btn-ghost",
+                        onclick: move |_| new_key_value.set(None),
+                        "我已记录，关闭"
+                    }
+                }
+            }
+
+            // 创建弹窗
             if show_create() {
                 div {
                     class: "modal-overlay",
                     div {
                         class: "modal",
                         h2 { class: "modal-title", "创建 API Key" }
+                        if let Some(err) = create_error() {
+                            div { class: "alert alert-error", "{err}" }
+                        }
                         form {
                             onsubmit: on_create,
                             div {
@@ -74,8 +118,8 @@ pub fn ApiKeyList() -> Element {
                                 button {
                                     class: "btn btn-primary",
                                     r#type: "submit",
-                                    disabled: loading(),
-                                    if loading() { "创建中..." } else { "创建" }
+                                    disabled: creating(),
+                                    if creating() { "创建中..." } else { "创建" }
                                 }
                             }
                         }
@@ -85,40 +129,58 @@ pub fn ApiKeyList() -> Element {
 
             div {
                 class: "table-container",
-                if keys.read().is_empty() {
-                    div {
-                        class: "empty-state",
-                        p { "暂无 API Key，点击上方按钮创建" }
-                    }
-                } else {
-                    table {
-                        class: "table",
-                        thead {
-                            tr {
-                                th { "名称" }
-                                th { "前缀" }
-                                th { "状态" }
-                                th { "创建时间" }
-                                th { "操作" }
+                match keys() {
+                    None => rsx! {
+                        div { class: "loading-state", "加载中..." }
+                    },
+                    Some(Err(e)) => rsx! {
+                        div { class: "alert alert-error", "加载失败：{e}" }
+                    },
+                    Some(Ok(list)) => {
+                        if list.is_empty() {
+                            rsx! {
+                                div {
+                                    class: "empty-state",
+                                    p { "暂无 API Key，点击上方按钮创建" }
+                                }
                             }
-                        }
-                        tbody {
-                            for key in keys.read().iter() {
-                                tr {
-                                    key: "{key.id}",
-                                    td { "{key.name}" }
-                                    td { code { "{key.prefix}..." } }
-                                    td {
-                                        span {
-                                            class: "badge badge-{key.status}",
-                                            "{key.status}"
+                        } else {
+                            rsx! {
+                                table {
+                                    class: "table",
+                                    thead {
+                                        tr {
+                                            th { "名称" }
+                                            th { "前缀" }
+                                            th { "状态" }
+                                            th { "创建时间" }
+                                            th { "操作" }
                                         }
                                     }
-                                    td { "{key.created_at}" }
-                                    td {
-                                        button {
-                                            class: "btn btn-sm btn-danger",
-                                            "删除"
+                                    tbody {
+                                        for key in list.iter() {
+                                            tr {
+                                                key: "{key.id}",
+                                                td { "{key.name}" }
+                                                td { code { "{key.key_preview}..." } }
+                                                td {
+                                                    span {
+                                                        class: if key.revoked { "badge badge-error" } else { "badge badge-success" },
+                                                        if key.revoked { "已撤销" } else { "活跃" }
+                                                    }
+                                                }
+                                                td { "{key.created_at}" }
+                                                td {
+                                                    button {
+                                                        class: "btn btn-sm btn-danger",
+                                                        onclick: {
+                                                            let id = key.id.to_string();
+                                                            move |_| on_delete(id.clone())
+                                                        },
+                                                        "删除"
+                                                    }
+                                                }
+                                            }
                                         }
                                     }
                                 }

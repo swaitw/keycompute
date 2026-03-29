@@ -1,6 +1,10 @@
 use dioxus::prelude::*;
 
+use crate::router::Route;
+use crate::services::auth_service;
+use crate::services::user_service;
 use crate::stores::auth_store::AuthStore;
+use crate::stores::user_store::{UserInfo, UserStore};
 
 #[component]
 pub fn Login() -> Element {
@@ -9,6 +13,8 @@ pub fn Login() -> Element {
     let mut loading = use_signal(|| false);
     let mut error_msg = use_signal(|| Option::<String>::None);
     let mut auth_store = use_context::<AuthStore>();
+    let mut user_store = use_context::<UserStore>();
+    let nav = use_navigator();
 
     let on_submit = move |evt: Event<FormData>| {
         evt.prevent_default();
@@ -21,8 +27,26 @@ pub fn Login() -> Element {
         loading.set(true);
         error_msg.set(None);
         spawn(async move {
-            auth_store.login(email_val, password_val);
-            loading.set(false);
+            match auth_service::login(&email_val, &password_val).await {
+                Ok(resp) => {
+                    auth_store.login(resp.access_token.clone(), resp.refresh_token.clone());
+                    // 拉取当前用户信息
+                    if let Ok(user) = user_service::get_current_user(&resp.access_token).await {
+                        *user_store.info.write() = Some(UserInfo {
+                            id: user.id.to_string(),
+                            email: user.email,
+                            name: user.name,
+                            role: user.role,
+                            tenant_id: user.tenant_id.to_string(),
+                        });
+                    }
+                    nav.push(Route::Dashboard {});
+                }
+                Err(e) => {
+                    error_msg.set(Some(format!("登录失败：{e}")));
+                    loading.set(false);
+                }
+            }
         });
     };
 

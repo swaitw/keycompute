@@ -2,7 +2,12 @@ use dioxus::prelude::*;
 
 use crate::i18n::Lang;
 use crate::router::Route;
-use crate::stores::{auth_store::AuthStore, ui_store::UiStore, user_store::UserStore};
+use crate::services::user_service;
+use crate::stores::{
+    auth_store::AuthStore,
+    ui_store::UiStore,
+    user_store::{UserInfo, UserStore},
+};
 use crate::views::shared::Toast;
 use ui::layout::sidebar::NavIcon;
 use ui::{AppShell, NavItem, NavSection};
@@ -11,10 +16,27 @@ use ui::{AppShell, NavItem, NavSection};
 #[component]
 pub fn App() -> Element {
     // 全局 context providers（必须在组件树顶层调用）
-    let _auth_store = use_context_provider(AuthStore::new);
-    let _user_store = use_context_provider(UserStore::new);
+    let auth_store = use_context_provider(AuthStore::new);
+    let mut user_store = use_context_provider(UserStore::new);
     let _ui_store = use_context_provider(UiStore::new);
     let _lang = use_context_provider(|| use_signal(Lang::default));
+
+    // App 启动时，若 localStorage 已有 token，自动拉取用户信息
+    use_effect(move || {
+        if let Some(token) = auth_store.token() {
+            spawn(async move {
+                if let Ok(user) = user_service::get_current_user(&token).await {
+                    *user_store.info.write() = Some(UserInfo {
+                        id: user.id.to_string(),
+                        email: user.email,
+                        name: user.name,
+                        role: user.role,
+                        tenant_id: user.tenant_id.to_string(),
+                    });
+                }
+            });
+        }
+    });
 
     rsx! {
         Router::<Route> {}
