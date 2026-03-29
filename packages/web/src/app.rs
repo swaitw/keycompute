@@ -81,6 +81,13 @@ pub fn AppLayout() -> Element {
             ],
         },
         NavSection {
+            title: Some("用量".to_string()),
+            items: vec![
+                NavItem::new("用量统计", "/usage", NavIcon::BarChart),
+                NavItem::new("账单", "/billing", NavIcon::Wallet),
+            ],
+        },
+        NavSection {
             title: Some("账务".to_string()),
             items: vec![
                 NavItem::new("支付与账单", "/payments", NavIcon::Wallet),

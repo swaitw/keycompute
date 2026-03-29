@@ -1,4 +1,7 @@
+use std::collections::HashMap;
+
 use dioxus::prelude::*;
+use ui::{BarChart, BarSeriesData, LineChart, LineSeriesData};
 
 use crate::hooks::use_i18n::use_i18n;
 use crate::router::Route;
@@ -42,6 +45,16 @@ pub fn Dashboard() -> Element {
         crate::services::api_key_service::list(&token).await
     });
 
+    // 拉取最近 30 条用量记录，用于图表聚合
+    let usage_records = use_resource(move || async move {
+        let token = auth_store.token().unwrap_or_default();
+        usage_service::list(
+            Some(client_api::api::usage::UsageQueryParams::new().with_limit(30)),
+            &token,
+        )
+        .await
+    });
+
     let total_requests = match usage_stats() {
         Some(Ok(ref s)) => s.total_requests.to_string(),
         Some(Err(_)) => "加载失败".to_string(),
@@ -60,6 +73,51 @@ pub fn Dashboard() -> Element {
         Some(Ok(ref keys)) => keys.iter().filter(|k| !k.revoked).count().to_string(),
         Some(Err(_)) => "—".to_string(),
         None => "—".to_string(),
+    };
+
+    // ---- 图表数据聚合 ----
+    // LineChart: 按日期聚合调用次数
+    let (line_x, line_series) = match usage_records() {
+        Some(Ok(records)) => {
+            let mut by_date: HashMap<String, f64> = HashMap::new();
+            for r in &records {
+                let date = r.created_at.get(..10).unwrap_or("").to_string();
+                *by_date.entry(date).or_default() += 1.0;
+            }
+            let mut pairs: Vec<(String, f64)> = by_date.into_iter().collect();
+            pairs.sort_by(|a, b| a.0.cmp(&b.0));
+            let x: Vec<String> = pairs.iter().map(|(d, _)| d.clone()).collect();
+            let y: Vec<f64> = pairs.iter().map(|(_, v)| *v).collect();
+            (
+                x,
+                vec![LineSeriesData {
+                    name: "调用次数".to_string(),
+                    data: y,
+                }],
+            )
+        }
+        _ => (vec![], vec![]),
+    };
+    // BarChart: 按模型聚合费用
+    let (bar_x, bar_series) = match usage_records() {
+        Some(Ok(records)) => {
+            let mut by_model: HashMap<String, f64> = HashMap::new();
+            for r in &records {
+                *by_model.entry(r.model.clone()).or_default() += r.cost.unwrap_or(0.0);
+            }
+            let mut pairs: Vec<(String, f64)> = by_model.into_iter().collect();
+            pairs.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+            let x: Vec<String> = pairs.iter().map(|(m, _)| m.clone()).collect();
+            let y: Vec<f64> = pairs.iter().map(|(_, v)| *v).collect();
+            (
+                x,
+                vec![BarSeriesData {
+                    name: "费用(¥)".to_string(),
+                    data: y,
+                }],
+            )
+        }
+        _ => (vec![], vec![]),
     };
 
     rsx! {
@@ -107,6 +165,41 @@ pub fn Dashboard() -> Element {
                     QuickLink { route: Route::ApiKeyList {}, label: i18n.t("dashboard.manage_api_keys").to_string() }
                     QuickLink { route: Route::PaymentsOverview {}, label: i18n.t("dashboard.recharge").to_string() }
                     QuickLink { route: Route::UserProfile {}, label: i18n.t("dashboard.account_settings").to_string() }
+                }
+            }
+
+            // 图表区块：调用趋势 + 模型费用
+            if !line_x.is_empty() {
+                div {
+                    class: "section",
+                    h2 { class: "section-title", "调用趋势（最近30条）" }
+                    div { class: "chart-container",
+                        LineChart {
+                            id: "dashboard-line-chart",
+                            title: "",
+                            x_data: line_x,
+                            series: line_series,
+                            width: 700,
+                            height: 280,
+                        }
+                    }
+                }
+            }
+
+            if !bar_x.is_empty() {
+                div {
+                    class: "section",
+                    h2 { class: "section-title", "模型费用分布" }
+                    div { class: "chart-container",
+                        BarChart {
+                            id: "dashboard-bar-chart",
+                            title: "",
+                            x_data: bar_x,
+                            series: bar_series,
+                            width: 700,
+                            height: 280,
+                        }
+                    }
                 }
             }
         }

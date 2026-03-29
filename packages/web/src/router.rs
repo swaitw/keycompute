@@ -2,9 +2,9 @@ use dioxus::prelude::*;
 
 use crate::app::AppLayout;
 use crate::views::{
-    NotFound,
+    Billing, NotFound, Usage,
     api_keys::ApiKeyList,
-    auth::{ForgotPassword, Login, Register},
+    auth::{ForgotPassword, Login, Register, ResetPassword, VerifyEmail},
     dashboard::Dashboard,
     distribution::DistributionOverview,
     payments::{PaymentsOverview, Recharge},
@@ -24,6 +24,10 @@ pub enum Route {
     Register {},
     #[route("/auth/forgot-password")]
     ForgotPassword {},
+    #[route("/auth/reset-password/:token")]
+    ResetPassword { token: String },
+    #[route("/auth/verify-email/:token")]
+    VerifyEmail { token: String },
 
     // 主应用（带 AppShell 布局）
     #[layout(AppLayout)]
@@ -31,6 +35,10 @@ pub enum Route {
         Dashboard {},
         #[route("/api-keys")]
         ApiKeyList {},
+        #[route("/usage")]
+        Usage {},
+        #[route("/billing")]
+        Billing {},
         #[route("/payments")]
         PaymentsOverview {},
         #[route("/payments/recharge")]
