@@ -1,10 +1,12 @@
 use dioxus::prelude::*;
 
+use crate::hooks::use_i18n::use_i18n;
 use crate::router::Route;
 use crate::services::auth_service;
 
 #[component]
 pub fn ForgotPassword() -> Element {
+    let i18n = use_i18n();
     let mut email = use_signal(String::new);
     let mut loading = use_signal(|| false);
     let mut sent = use_signal(|| false);
@@ -12,10 +14,14 @@ pub fn ForgotPassword() -> Element {
 
     let nav = use_navigator();
 
+    // 提前提取 &'static str，避免闭包成为 FnOnce
+    let t_enter_email = i18n.t("auth.enter_email");
+    let t_send_failed = i18n.t("auth.send_failed");
+
     let on_submit = move |evt: Event<FormData>| {
         evt.prevent_default();
         if email().is_empty() {
-            error_msg.set(Some("请输入邮箱地址".to_string()));
+            error_msg.set(Some(t_enter_email.to_string()));
             return;
         }
         loading.set(true);
@@ -28,7 +34,7 @@ pub fn ForgotPassword() -> Element {
                     loading.set(false);
                 }
                 Err(e) => {
-                    error_msg.set(Some(format!("发送失败：{e}")));
+                    error_msg.set(Some(format!("{t_send_failed}：{e}")));
                     loading.set(false);
                 }
             }
@@ -42,14 +48,14 @@ pub fn ForgotPassword() -> Element {
                 class: "auth-card",
                 div {
                     class: "auth-header",
-                    h1 { class: "auth-title", "重置密码" }
-                    p { class: "auth-subtitle", "输入您的邮箱，我们将发送重置链接" }
+                    h1 { class: "auth-title", {i18n.t("auth.reset_password")} }
+                    p { class: "auth-subtitle", {i18n.t("auth.reset_subtitle")} }
                 }
 
                 if sent() {
                     div {
                         class: "alert alert-success",
-                        "重置链接已发送到您的邮箱，请查收"
+                        {i18n.t("auth.reset_sent")}
                     }
                 } else {
                     if let Some(err) = error_msg() {
@@ -59,11 +65,11 @@ pub fn ForgotPassword() -> Element {
                         onsubmit: on_submit,
                         div {
                             class: "form-group",
-                            label { class: "form-label", "邮箱" }
+                            label { class: "form-label", {i18n.t("auth.email")} }
                             input {
                                 class: "form-input",
                                 r#type: "email",
-                                placeholder: "请输入注册邮箱",
+                                placeholder: i18n.t("auth.reset_email_placeholder"),
                                 value: "{email}",
                                 oninput: move |e| email.set(e.value()),
                             }
@@ -72,7 +78,7 @@ pub fn ForgotPassword() -> Element {
                             class: "btn btn-primary btn-full",
                             r#type: "submit",
                             disabled: loading(),
-                            if loading() { "发送中..." } else { "发送重置链接" }
+                            if loading() { {i18n.t("auth.sending")} } else { {i18n.t("auth.send_reset_link")} }
                         }
                     }
                 }
@@ -83,7 +89,7 @@ pub fn ForgotPassword() -> Element {
                         class: "link",
                         r#type: "button",
                         onclick: move |_| { nav.push(Route::Login {}); },
-                        "返回登录"
+                        {i18n.t("auth.back_to_login")}
                     }
                 }
             }

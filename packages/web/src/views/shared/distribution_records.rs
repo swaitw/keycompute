@@ -156,7 +156,11 @@ pub fn DistributionRecords() -> Element {
                     let count = if is_admin {
                         admin_records().and_then(|r| r.ok()).map(|l| l.len()).unwrap_or(0)
                     } else {
-                        0
+                        // 普通用户从收益统计中取推荐人数
+                        earnings()
+                            .and_then(|r| r.ok())
+                            .map(|e| e.referral_count.max(0) as usize)
+                            .unwrap_or(0)
                     };
                     format!("共 {} 条", count)
                 }

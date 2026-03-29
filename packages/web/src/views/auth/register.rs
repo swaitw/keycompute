@@ -1,10 +1,12 @@
 use dioxus::prelude::*;
 
+use crate::hooks::use_i18n::use_i18n;
 use crate::router::Route;
 use crate::services::auth_service;
 
 #[component]
 pub fn Register() -> Element {
+    let i18n = use_i18n();
     let mut name = use_signal(String::new);
     let mut email = use_signal(String::new);
     let mut password = use_signal(String::new);
@@ -13,14 +15,19 @@ pub fn Register() -> Element {
     let mut error_msg = use_signal(|| Option::<String>::None);
     let nav = use_navigator();
 
+    // 提前提取 &'static str，避免闭包成为 FnOnce
+    let t_fill_required = i18n.t("auth.fill_required");
+    let t_pwd_mismatch = i18n.t("form.password_mismatch");
+    let t_register_failed = i18n.t("auth.register_failed");
+
     let on_submit = move |evt: Event<FormData>| {
         evt.prevent_default();
         if name().is_empty() || email().is_empty() || password().is_empty() {
-            error_msg.set(Some("请填写所有必填项".to_string()));
+            error_msg.set(Some(t_fill_required.to_string()));
             return;
         }
         if password() != confirm_password() {
-            error_msg.set(Some("两次密码输入不一致".to_string()));
+            error_msg.set(Some(t_pwd_mismatch.to_string()));
             return;
         }
         loading.set(true);
@@ -34,7 +41,7 @@ pub fn Register() -> Element {
                     nav.push(Route::Login {});
                 }
                 Err(e) => {
-                    error_msg.set(Some(format!("注册失败：{e}")));
+                    error_msg.set(Some(format!("{t_register_failed}：{e}")));
                     loading.set(false);
                 }
             }
@@ -48,8 +55,8 @@ pub fn Register() -> Element {
                 class: "auth-card",
                 div {
                     class: "auth-header",
-                    h1 { class: "auth-title", "注册" }
-                    p { class: "auth-subtitle", "创建您的账户" }
+                    h1 { class: "auth-title", {i18n.t("auth.register")} }
+                    p { class: "auth-subtitle", {i18n.t("auth.register_subtitle")} }
                 }
 
                 if let Some(err) = error_msg() {
@@ -60,44 +67,44 @@ pub fn Register() -> Element {
                     onsubmit: on_submit,
                     div {
                         class: "form-group",
-                        label { class: "form-label", "姓名" }
+                        label { class: "form-label", {i18n.t("auth.name")} }
                         input {
                             class: "form-input",
                             r#type: "text",
-                            placeholder: "请输入姓名",
+                            placeholder: i18n.t("auth.name_placeholder"),
                             value: "{name}",
                             oninput: move |e| name.set(e.value()),
                         }
                     }
                     div {
                         class: "form-group",
-                        label { class: "form-label", "邮箱" }
+                        label { class: "form-label", {i18n.t("auth.email")} }
                         input {
                             class: "form-input",
                             r#type: "email",
-                            placeholder: "请输入邮箱",
+                            placeholder: i18n.t("auth.email_placeholder"),
                             value: "{email}",
                             oninput: move |e| email.set(e.value()),
                         }
                     }
                     div {
                         class: "form-group",
-                        label { class: "form-label", "密码" }
+                        label { class: "form-label", {i18n.t("auth.password")} }
                         input {
                             class: "form-input",
                             r#type: "password",
-                            placeholder: "请输入密码（至少8位）",
+                            placeholder: i18n.t("auth.password_min8"),
                             value: "{password}",
                             oninput: move |e| password.set(e.value()),
                         }
                     }
                     div {
                         class: "form-group",
-                        label { class: "form-label", "确认密码" }
+                        label { class: "form-label", {i18n.t("auth.confirm_password")} }
                         input {
                             class: "form-input",
                             r#type: "password",
-                            placeholder: "再次输入密码",
+                            placeholder: i18n.t("auth.confirm_password_placeholder"),
                             value: "{confirm_password}",
                             oninput: move |e| confirm_password.set(e.value()),
                         }
@@ -106,18 +113,19 @@ pub fn Register() -> Element {
                         class: "btn btn-primary btn-full",
                         r#type: "submit",
                         disabled: loading(),
-                        if loading() { "注册中..." } else { "注册" }
+                        if loading() { {i18n.t("auth.registering")} } else { {i18n.t("auth.register")} }
                     }
                 }
 
                 div {
                     class: "auth-footer",
-                    "已有账户？"
+                    {i18n.t("auth.has_account")}
                     button {
                         class: "link",
                         r#type: "button",
                         onclick: move |_| { nav.push(Route::Login {}); },
-                        " 立即登录"
+                        " ",
+                        {i18n.t("auth.login_now")}
                     }
                 }
             }

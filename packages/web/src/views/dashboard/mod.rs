@@ -1,5 +1,6 @@
 use dioxus::prelude::*;
 
+use crate::hooks::use_i18n::use_i18n;
 use crate::router::Route;
 use crate::services::{payment_service, usage_service};
 use crate::stores::auth_store::AuthStore;
@@ -7,14 +8,19 @@ use crate::stores::user_store::UserStore;
 
 #[component]
 pub fn Dashboard() -> Element {
+    let i18n = use_i18n();
     let user_store = use_context::<UserStore>();
     let auth_store = use_context::<AuthStore>();
 
     let user_info = user_store.info.read();
     let greeting = if let Some(ref u) = *user_info {
-        format!("你好，{}", u.name.as_deref().unwrap_or(&u.email))
+        format!(
+            "{}，{}",
+            i18n.t("dashboard.greeting"),
+            u.name.as_deref().unwrap_or(&u.email)
+        )
     } else {
-        "你好".to_string()
+        i18n.t("dashboard.greeting").to_string()
     };
     drop(user_info);
 
@@ -62,45 +68,45 @@ pub fn Dashboard() -> Element {
             div {
                 class: "page-header",
                 h1 { class: "page-title", "{greeting}" }
-                p { class: "page-subtitle", "这是您的控制台概览" }
+                p { class: "page-subtitle", {i18n.t("dashboard.subtitle")} }
             }
 
             div {
                 class: "stats-grid",
                 StatCard {
-                    title: "API 调用次数",
+                    title: i18n.t("dashboard.api_calls").to_string(),
                     value: "{total_requests}",
-                    label: "本周累计",
+                    label: i18n.t("dashboard.weekly_total").to_string(),
                     icon: "key",
                 }
                 StatCard {
-                    title: "账户余额",
+                    title: i18n.t("dashboard.balance").to_string(),
                     value: "{balance_val}",
-                    label: "可用",
+                    label: i18n.t("dashboard.available").to_string(),
                     icon: "wallet",
                 }
                 StatCard {
-                    title: "活跃 Key",
+                    title: i18n.t("dashboard.active_keys").to_string(),
                     value: "{active_keys}",
-                    label: "总计",
+                    label: i18n.t("dashboard.total").to_string(),
                     icon: "list",
                 }
                 StatCard {
-                    title: "本周消耗",
+                    title: i18n.t("dashboard.weekly_cost").to_string(),
                     value: "{today_cost}",
-                    label: "已用",
+                    label: i18n.t("dashboard.used").to_string(),
                     icon: "chart",
                 }
             }
 
             div {
                 class: "section",
-                h2 { class: "section-title", "快速入口" }
+                h2 { class: "section-title", {i18n.t("dashboard.quick_links")} }
                 div {
                     class: "quick-links",
-                    QuickLink { route: Route::ApiKeyList {}, label: "管理 API Key" }
-                    QuickLink { route: Route::PaymentsOverview {}, label: "充値余额" }
-                    QuickLink { route: Route::UserProfile {}, label: "账户设置" }
+                    QuickLink { route: Route::ApiKeyList {}, label: i18n.t("dashboard.manage_api_keys").to_string() }
+                    QuickLink { route: Route::PaymentsOverview {}, label: i18n.t("dashboard.recharge").to_string() }
+                    QuickLink { route: Route::UserProfile {}, label: i18n.t("dashboard.account_settings").to_string() }
                 }
             }
         }

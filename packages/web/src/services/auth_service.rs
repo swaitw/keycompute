@@ -2,8 +2,8 @@ use client_api::error::Result;
 use client_api::{
     AuthApi,
     api::auth::{
-        AuthResponse, ForgotPasswordRequest, LoginRequest, MessageResponse, RegisterRequest,
-        ResetPasswordRequest,
+        AuthResponse, ForgotPasswordRequest, LoginRequest, MessageResponse, RefreshTokenRequest,
+        RegisterRequest, ResetPasswordRequest,
     },
 };
 
@@ -23,6 +23,13 @@ pub async fn register(email: &str, password: &str, name: Option<&str>) -> Result
         req = req.with_name(n);
     }
     api.register(&req).await
+}
+
+pub async fn refresh_token(refresh_token: &str) -> Result<AuthResponse> {
+    let client = get_client();
+    AuthApi::new(&client)
+        .refresh_token(&RefreshTokenRequest::new(refresh_token))
+        .await
 }
 
 pub async fn forgot_password(email: &str) -> Result<MessageResponse> {

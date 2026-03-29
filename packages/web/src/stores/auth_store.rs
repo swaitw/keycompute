@@ -58,6 +58,10 @@ impl AuthStore {
         (self.state)().access_token.clone()
     }
 
+    pub fn refresh_token(&self) -> Option<String> {
+        (self.state)().refresh_token.clone()
+    }
+
     fn load_from_storage() -> AuthState {
         #[cfg(target_arch = "wasm32")]
         {

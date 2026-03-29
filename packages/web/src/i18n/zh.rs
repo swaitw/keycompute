@@ -44,6 +44,28 @@ pub static ZH: LazyLock<HashMap<&'static str, &'static str>> = LazyLock::new(|| 
     m.insert("auth.has_account", "已有账号？");
     m.insert("auth.send_reset_email", "发送重置邮件");
     m.insert("auth.back_to_login", "返回登录");
+    m.insert("auth.login_subtitle", "登录您的账户以继续");
+    m.insert("auth.register_subtitle", "创建您的账户");
+    m.insert("auth.reset_subtitle", "输入您的邮箱，我们将发送重置链接");
+    m.insert("auth.reset_sent", "重置链接已发送到您的邮箱，请查收");
+    m.insert("auth.register_now", "立即注册");
+    m.insert("auth.login_now", "立即登录");
+    m.insert("auth.email_placeholder", "请输入邮箱");
+    m.insert("auth.password_placeholder", "请输入密码");
+    m.insert("auth.name_placeholder", "请输入姓名");
+    m.insert("auth.confirm_password_placeholder", "再次输入密码");
+    m.insert("auth.reset_email_placeholder", "请输入注册邮箱");
+    m.insert("auth.fill_all", "请填写邮箱和密码");
+    m.insert("auth.fill_required", "请填写所有必填项");
+    m.insert("auth.enter_email", "请输入邮箱地址");
+    m.insert("auth.login_failed", "登录失败");
+    m.insert("auth.register_failed", "注册失败");
+    m.insert("auth.send_failed", "发送失败");
+    m.insert("auth.sending", "发送中...");
+    m.insert("auth.send_reset_link", "发送重置链接");
+    m.insert("auth.logging_in", "登录中...");
+    m.insert("auth.registering", "注册中...");
+    m.insert("auth.password_min8", "密码至少8位");
 
     // ── 页面标题 ─────────────────────────────────
     m.insert("page.home", "仪表盘");
@@ -109,6 +131,20 @@ pub static ZH: LazyLock<HashMap<&'static str, &'static str>> = LazyLock::new(|| 
     m.insert("common.tokens", "Token 数");
     m.insert("common.requests", "请求数");
     m.insert("common.cost", "费用");
+    m.insert("dashboard.greeting", "你好");
+    m.insert("dashboard.subtitle", "这是您的控制台概览");
+    m.insert("dashboard.api_calls", "API 调用次数");
+    m.insert("dashboard.weekly_total", "本周累计");
+    m.insert("dashboard.balance", "账户余额");
+    m.insert("dashboard.available", "可用");
+    m.insert("dashboard.active_keys", "活跃 Key");
+    m.insert("dashboard.total", "总计");
+    m.insert("dashboard.weekly_cost", "本周消耗");
+    m.insert("dashboard.used", "已用");
+    m.insert("dashboard.quick_links", "快速入口");
+    m.insert("dashboard.manage_api_keys", "管理 API Key");
+    m.insert("dashboard.recharge", "充値余额");
+    m.insert("dashboard.account_settings", "账户设置");
 
     m
 });

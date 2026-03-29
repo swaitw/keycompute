@@ -44,6 +44,37 @@ pub static EN: LazyLock<HashMap<&'static str, &'static str>> = LazyLock::new(|| 
     m.insert("auth.has_account", "Already have an account?");
     m.insert("auth.send_reset_email", "Send Reset Email");
     m.insert("auth.back_to_login", "Back to Sign In");
+    m.insert("auth.login_subtitle", "Sign in to your account to continue");
+    m.insert("auth.register_subtitle", "Create your account");
+    m.insert(
+        "auth.reset_subtitle",
+        "Enter your email and we'll send you a reset link",
+    );
+    m.insert("auth.reset_sent", "Reset link has been sent to your email");
+    m.insert("auth.register_now", "Sign up");
+    m.insert("auth.login_now", "Sign in");
+    m.insert("auth.email_placeholder", "Enter your email");
+    m.insert("auth.password_placeholder", "Enter your password");
+    m.insert("auth.name_placeholder", "Enter your name");
+    m.insert("auth.confirm_password_placeholder", "Re-enter password");
+    m.insert(
+        "auth.reset_email_placeholder",
+        "Enter your registered email",
+    );
+    m.insert("auth.fill_all", "Please fill in email and password");
+    m.insert("auth.fill_required", "Please fill in all required fields");
+    m.insert("auth.enter_email", "Please enter your email address");
+    m.insert("auth.login_failed", "Login failed");
+    m.insert("auth.register_failed", "Registration failed");
+    m.insert("auth.send_failed", "Failed to send");
+    m.insert("auth.sending", "Sending...");
+    m.insert("auth.send_reset_link", "Send Reset Link");
+    m.insert("auth.logging_in", "Signing in...");
+    m.insert("auth.registering", "Signing up...");
+    m.insert(
+        "auth.password_min8",
+        "Password must be at least 8 characters",
+    );
 
     // ── Page Titles ──────────────────────────────
     m.insert("page.home", "Dashboard");
@@ -118,6 +149,20 @@ pub static EN: LazyLock<HashMap<&'static str, &'static str>> = LazyLock::new(|| 
     m.insert("common.tokens", "Tokens");
     m.insert("common.requests", "Requests");
     m.insert("common.cost", "Cost");
+    m.insert("dashboard.greeting", "Hello");
+    m.insert("dashboard.subtitle", "Here is your console overview");
+    m.insert("dashboard.api_calls", "API Calls");
+    m.insert("dashboard.weekly_total", "This Week");
+    m.insert("dashboard.balance", "Account Balance");
+    m.insert("dashboard.available", "Available");
+    m.insert("dashboard.active_keys", "Active Keys");
+    m.insert("dashboard.total", "Total");
+    m.insert("dashboard.weekly_cost", "Weekly Cost");
+    m.insert("dashboard.used", "Used");
+    m.insert("dashboard.quick_links", "Quick Links");
+    m.insert("dashboard.manage_api_keys", "Manage API Keys");
+    m.insert("dashboard.recharge", "Recharge Balance");
+    m.insert("dashboard.account_settings", "Account Settings");
 
     m
 });

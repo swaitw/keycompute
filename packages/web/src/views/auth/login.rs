@@ -1,5 +1,6 @@
 use dioxus::prelude::*;
 
+use crate::hooks::use_i18n::use_i18n;
 use crate::router::Route;
 use crate::services::auth_service;
 use crate::services::user_service;
@@ -8,6 +9,7 @@ use crate::stores::user_store::{UserInfo, UserStore};
 
 #[component]
 pub fn Login() -> Element {
+    let i18n = use_i18n();
     let mut email = use_signal(String::new);
     let mut password = use_signal(String::new);
     let mut loading = use_signal(|| false);
@@ -16,12 +18,16 @@ pub fn Login() -> Element {
     let mut user_store = use_context::<UserStore>();
     let nav = use_navigator();
 
+    // 提前提取 &'static str，闭包只捕获 Copy 类型避免成为 FnOnce
+    let t_fill_all = i18n.t("auth.fill_all");
+    let t_login_failed = i18n.t("auth.login_failed");
+
     let on_submit = move |evt: Event<FormData>| {
         evt.prevent_default();
         let email_val = email();
         let password_val = password();
         if email_val.is_empty() || password_val.is_empty() {
-            error_msg.set(Some("请填写邮箱和密码".to_string()));
+            error_msg.set(Some(t_fill_all.to_string()));
             return;
         }
         loading.set(true);
@@ -43,7 +49,7 @@ pub fn Login() -> Element {
                     nav.push(Route::Dashboard {});
                 }
                 Err(e) => {
-                    error_msg.set(Some(format!("登录失败：{e}")));
+                    error_msg.set(Some(format!("{t_login_failed}：{e}")));
                     loading.set(false);
                 }
             }
@@ -57,8 +63,8 @@ pub fn Login() -> Element {
                 class: "auth-card",
                 div {
                     class: "auth-header",
-                    h1 { class: "auth-title", "登录" }
-                    p { class: "auth-subtitle", "登录您的账户以继续" }
+                    h1 { class: "auth-title", {i18n.t("auth.login")} }
+                    p { class: "auth-subtitle", {i18n.t("auth.login_subtitle")} }
                 }
 
                 if let Some(err) = error_msg() {
@@ -72,22 +78,22 @@ pub fn Login() -> Element {
                     onsubmit: on_submit,
                     div {
                         class: "form-group",
-                        label { class: "form-label", "邮箱" }
+                        label { class: "form-label", {i18n.t("auth.email")} }
                         input {
                             class: "form-input",
                             r#type: "email",
-                            placeholder: "请输入邮箱",
+                            placeholder: i18n.t("auth.email_placeholder"),
                             value: "{email}",
                             oninput: move |e| email.set(e.value()),
                         }
                     }
                     div {
                         class: "form-group",
-                        label { class: "form-label", "密码" }
+                        label { class: "form-label", {i18n.t("auth.password")} }
                         input {
                             class: "form-input",
                             r#type: "password",
-                            placeholder: "请输入密码",
+                            placeholder: i18n.t("auth.password_placeholder"),
                             value: "{password}",
                             oninput: move |e| password.set(e.value()),
                         }
@@ -98,25 +104,26 @@ pub fn Login() -> Element {
                             class: "link",
                             r#type: "button",
                             onclick: move |_| { nav.push(Route::ForgotPassword {}); },
-                            "忘记密码？"
+                            {i18n.t("auth.forgot_password")}
                         }
                     }
                     button {
                         class: "btn btn-primary btn-full",
                         r#type: "submit",
                         disabled: loading(),
-                        if loading() { "登录中..." } else { "登录" }
+                        if loading() { {i18n.t("auth.logging_in")} } else { {i18n.t("auth.login")} }
                     }
                 }
 
                 div {
                     class: "auth-footer",
-                    "还没有账户？"
+                    {i18n.t("auth.no_account")}
                     button {
                         class: "link",
                         r#type: "button",
                         onclick: move |_| { nav.push(Route::Register {}); },
-                        " 立即注册"
+                        " ",
+                        {i18n.t("auth.register_now")}
                     }
                 }
             }
