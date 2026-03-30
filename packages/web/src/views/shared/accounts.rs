@@ -5,6 +5,7 @@ const PAGE_SIZE: usize = 20;
 
 use crate::services::{account_service, api_client::with_auto_refresh};
 use crate::stores::auth_store::AuthStore;
+use crate::stores::ui_store::UiStore;
 use crate::stores::user_store::UserStore;
 use crate::utils::time::format_time;
 
@@ -34,6 +35,7 @@ pub fn Accounts() -> Element {
 #[component]
 fn AdminAccountsView() -> Element {
     let auth_store = use_context::<AuthStore>();
+    let mut ui_store = use_context::<UiStore>();
     let mut show_create = use_signal(|| false);
     let mut create_name = use_signal(String::new);
     let mut create_provider = use_signal(String::new);
@@ -42,6 +44,16 @@ fn AdminAccountsView() -> Element {
     let mut saving = use_signal(|| false);
     let mut error_msg = use_signal(String::new);
     let mut page = use_signal(|| 1u32);
+
+    // 编辑弹窗状态
+    let mut edit_id = use_signal(String::new);
+    let mut edit_name = use_signal(String::new);
+    let mut edit_api_key = use_signal(String::new);
+    let mut edit_api_base = use_signal(String::new);
+    let mut edit_is_active = use_signal(|| true);
+    let mut show_edit = use_signal(|| false);
+    let mut edit_saving = use_signal(|| false);
+    let mut edit_error = use_signal(String::new);
 
     let mut accounts = use_resource(move || async move {
         with_auto_refresh(auth_store, |token| async move {
@@ -77,12 +89,52 @@ fn AdminAccountsView() -> Element {
                     create_api_base.write().clear();
                     page.set(1);
                     accounts.restart();
+                    ui_store.show_success("渠道已创建");
                 }
                 Err(e) => {
                     *error_msg.write() = format!("创建失败：{}", e);
                 }
             }
             *saving.write() = false;
+        });
+    };
+
+    // 提交编辑
+    let on_edit_save = move |_| {
+        let id = edit_id();
+        let name_val = edit_name();
+        let key_val = edit_api_key();
+        let base_val = edit_api_base();
+        let active = edit_is_active();
+        if name_val.trim().is_empty() {
+            *edit_error.write() = "渠道名称不能为空".to_string();
+            return;
+        }
+        let token = auth_store.token().unwrap_or_default();
+        edit_saving.set(true);
+        *edit_error.write() = String::new();
+        spawn(async move {
+            use client_api::api::admin::UpdateAccountRequest;
+            let mut req = UpdateAccountRequest::new()
+                .with_name(name_val)
+                .with_is_active(active);
+            if !key_val.trim().is_empty() {
+                req = req.with_api_key(key_val);
+            }
+            if !base_val.trim().is_empty() {
+                req.api_base = Some(base_val);
+            }
+            match account_service::update(&id, req, &token).await {
+                Ok(_) => {
+                    show_edit.set(false);
+                    accounts.restart();
+                    ui_store.show_success("渠道已更新");
+                }
+                Err(e) => {
+                    *edit_error.write() = format!("更新失败：{}", e);
+                }
+            }
+            edit_saving.set(false);
         });
     };
 
@@ -147,6 +199,25 @@ fn AdminAccountsView() -> Element {
                                     td { { format_time(&acc.created_at) } }
                                     td {
                                         div { class: "btn-group",
+                                            Button {
+                                                variant: ButtonVariant::Ghost,
+                                                size: ButtonSize::Small,
+                                                onclick: {
+                                                    let id = acc.id.clone();
+                                                    let name = acc.name.clone();
+                                                    let active = acc.is_active;
+                                                    move |_| {
+                                                        edit_id.set(id.clone());
+                                                        edit_name.set(name.clone());
+                                                        edit_api_key.set(String::new());
+                                                        edit_api_base.set(String::new());
+                                                        edit_is_active.set(active);
+                                                        *edit_error.write() = String::new();
+                                                        show_edit.set(true);
+                                                    }
+                                                },
+                                                "编辑"
+                                            }
                                             Button {
                                                 variant: ButtonVariant::Ghost,
                                                 size: ButtonSize::Small,
@@ -268,6 +339,83 @@ fn AdminAccountsView() -> Element {
                             loading: saving(),
                             onclick: on_submit,
                             if saving() { "保存中..." } else { "保存" }
+                        }
+                    }
+                }
+            }
+        }
+        // 编辑渠道弹窗
+        if show_edit() {
+            div { class: "modal-backdrop",
+                onclick: move |_| show_edit.set(false),
+                div {
+                    class: "modal",
+                    onclick: move |e| e.stop_propagation(),
+                    div { class: "modal-header",
+                        h2 { class: "modal-title", "编辑 LLM 渠道" }
+                        button {
+                            class: "btn btn-ghost btn-sm",
+                            r#type: "button",
+                            onclick: move |_| show_edit.set(false),
+                            "✕"
+                        }
+                    }
+                    div { class: "modal-body",
+                        if !edit_error().is_empty() {
+                            div { class: "alert alert-error",
+                                span { "{edit_error}" }
+                            }
+                        }
+                        div { class: "form-group",
+                            label { class: "form-label", "渠道名称 *" }
+                            input {
+                                class: "input-field",
+                                value: "{edit_name}",
+                                oninput: move |e| *edit_name.write() = e.value(),
+                            }
+                        }
+                        div { class: "form-group",
+                            label { class: "form-label", "新 API Key（留空则不修改）" }
+                            input {
+                                class: "input-field",
+                                r#type: "password",
+                                placeholder: "留空不修改当前 Key",
+                                value: "{edit_api_key}",
+                                oninput: move |e| *edit_api_key.write() = e.value(),
+                            }
+                        }
+                        div { class: "form-group",
+                            label { class: "form-label", "自定义 Base URL（留空则不修改）" }
+                            input {
+                                class: "input-field",
+                                placeholder: "https://api.openai.com/v1",
+                                value: "{edit_api_base}",
+                                oninput: move |e| *edit_api_base.write() = e.value(),
+                            }
+                        }
+                        div { class: "form-group",
+                            label { class: "form-label",
+                                input {
+                                    r#type: "checkbox",
+                                    checked: edit_is_active(),
+                                    oninput: move |e| edit_is_active.set(e.value() == "true"),
+                                    style: "margin-right:6px",
+                                }
+                                "启用渠道"
+                            }
+                        }
+                    }
+                    div { class: "modal-footer",
+                        Button {
+                            variant: ButtonVariant::Ghost,
+                            onclick: move |_| show_edit.set(false),
+                            "取消"
+                        }
+                        Button {
+                            variant: ButtonVariant::Primary,
+                            loading: edit_saving(),
+                            onclick: on_edit_save,
+                            if edit_saving() { "保存中..." } else { "保存" }
                         }
                     }
                 }

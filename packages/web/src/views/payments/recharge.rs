@@ -1,4 +1,6 @@
 use dioxus::prelude::*;
+use gloo_timers::future::sleep;
+use std::time::Duration;
 
 use client_api::api::payment::CreatePaymentOrderRequest;
 
@@ -68,10 +70,12 @@ pub fn Recharge() -> Element {
     let mut pay_method = use_signal(|| PayMethod::Alipay);
     let mut loading = use_signal(|| false);
     let mut order_state = use_signal(|| OrderState::Idle);
-    // 订单轮询计数器，变化时触发 use_resource 重执行
+    // 订单手动轮询计数器，变化时触发 use_resource 重执行
     let mut poll_tick = use_signal(|| 0u32);
+    // 自动轮询是否激活（进入 Pending 后开始，离开后停止）
+    let mut auto_poll_active = use_signal(|| false);
 
-    // 轮询当前订单状态（当 out_trade_no 存在时）
+    // 手动触发的订单状态查询
     let _poll = use_resource(move || async move {
         let tick = poll_tick();
         if tick == 0 {
@@ -97,8 +101,47 @@ pub fn Recharge() -> Element {
                         reason: format!("订单状态：{}", order.status),
                     });
                 }
-                _ => {} // 仍在处理中，继续轮询
+                _ => {} // 仍在处理中
             }
+        }
+    });
+
+    // 自动轮询：进入 Pending 状态后每 5 秒自动检查一次
+    use_effect(move || {
+        if auto_poll_active() {
+            spawn(async move {
+                loop {
+                    sleep(Duration::from_secs(5)).await;
+                    // 若状态已不是 Pending，停止轮询
+                    match order_state() {
+                        OrderState::Pending {
+                            ref out_trade_no, ..
+                        } => {
+                            let no = out_trade_no.clone();
+                            let token = auth_store.token().unwrap_or_default();
+                            if let Ok(order) = payment_service::sync_order(&no, &token).await {
+                                match order.status.as_str() {
+                                    "paid" | "success" => {
+                                        order_state.set(OrderState::Paid { out_trade_no: no });
+                                        ui_store.show_success("支付成功！余额已入账");
+                                        auto_poll_active.set(false);
+                                        break;
+                                    }
+                                    "failed" | "cancelled" => {
+                                        order_state.set(OrderState::Failed {
+                                            reason: format!("订单已失效：{}", order.status),
+                                        });
+                                        auto_poll_active.set(false);
+                                        break;
+                                    }
+                                    _ => {} // 继续轮询
+                                }
+                            }
+                        }
+                        _ => break, // 状态已变更，停止
+                    }
+                }
+            });
         }
     });
 
@@ -131,6 +174,8 @@ pub fn Recharge() -> Element {
                         method: order.payment_method.clone(),
                     });
                     amount.set(String::new());
+                    // 启动自动轮询
+                    auto_poll_active.set(true);
                 }
                 Err(e) => {
                     loading.set(false);
@@ -312,7 +357,10 @@ pub fn Recharge() -> Element {
                                 button {
                                     class: "btn btn-ghost",
                                     r#type: "button",
-                                    onclick: move |_| order_state.set(OrderState::Idle),
+                                    onclick: move |_| {
+                                        auto_poll_active.set(false);
+                                        order_state.set(OrderState::Idle);
+                                    },
                                     "取消订单"
                                 }
                             }

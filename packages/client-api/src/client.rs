@@ -127,7 +127,10 @@ impl ApiClient {
     ///
     /// 重试条件：网络/连接错误、服务器 5xx、限流 429
     /// 每次重试使用 `try_clone` 克隆 builder，无需外部依赖
-    async fn send_and_parse<T: DeserializeOwned>(&self, builder: RequestBuilder) -> Result<T> {
+    pub(crate) async fn send_and_parse<T: DeserializeOwned>(
+        &self,
+        builder: RequestBuilder,
+    ) -> Result<T> {
         let max_retries = if self.inner.config.retry_enabled {
             self.inner.config.max_retries
         } else {
@@ -197,28 +200,19 @@ impl ApiClient {
 }
 
 /// 用于 OpenAI 兼容 API 的客户端（使用 API Key 而非 Bearer Token）
+///
+/// 内部复用 `ApiClient` 的 `send_and_parse` 重试逻辑。
 #[derive(Debug, Clone)]
 pub struct OpenAiClient {
-    inner: Arc<ClientInner>,
+    /// 内部复用标准 ApiClient，仅认证头格式不同
+    api_client: ApiClient,
 }
 
 impl OpenAiClient {
     /// 创建新的 OpenAI 客户端
     pub fn new(config: ClientConfig) -> Result<Self> {
-        config.validate()?;
-
-        let client = Client::builder()
-            .timeout(Duration::from_secs(config.timeout_secs))
-            .build()
-            .map_err(|e| ClientError::Config(format!("Failed to create HTTP client: {}", e)))?;
-
-        Ok(Self {
-            inner: Arc::new(ClientInner {
-                client,
-                config,
-                auth_token: RwLock::new(None),
-            }),
-        })
+        let api_client = ApiClient::new(config)?;
+        Ok(Self { api_client })
     }
 
     /// 发送请求（使用 API Key 认证）
@@ -228,8 +222,9 @@ impl OpenAiClient {
         path: &str,
         api_key: &str,
     ) -> Result<RequestBuilder> {
-        let url = self.inner.config.build_url(path);
+        let url = self.api_client.inner.config.build_url(path);
         let builder = self
+            .api_client
             .inner
             .client
             .request(method, &url)
@@ -237,7 +232,7 @@ impl OpenAiClient {
         Ok(builder)
     }
 
-    /// 发送 POST 请求并解析响应
+    /// 发送 POST 请求并解析响应（含重试）
     pub async fn post_json<T: DeserializeOwned, B: Serialize>(
         &self,
         path: &str,
@@ -247,30 +242,14 @@ impl OpenAiClient {
         let builder = self
             .request_with_api_key(Method::POST, path, api_key)
             .await?;
-        let response = builder.json(body).send().await.map_err(ClientError::from)?;
-
-        let status = response.status();
-        if status.is_success() {
-            response.json::<T>().await.map_err(ClientError::from)
-        } else {
-            let text = response.text().await.unwrap_or_default();
-            Err(ClientError::from_status(status.as_u16(), text))
-        }
+        self.api_client.send_and_parse(builder.json(body)).await
     }
 
-    /// 发送 GET 请求并解析响应
+    /// 发送 GET 请求并解析响应（含重试）
     pub async fn get_json<T: DeserializeOwned>(&self, path: &str, api_key: &str) -> Result<T> {
         let builder = self
             .request_with_api_key(Method::GET, path, api_key)
             .await?;
-        let response = builder.send().await.map_err(ClientError::from)?;
-
-        let status = response.status();
-        if status.is_success() {
-            response.json::<T>().await.map_err(ClientError::from)
-        } else {
-            let text = response.text().await.unwrap_or_default();
-            Err(ClientError::from_status(status.as_u16(), text))
-        }
+        self.api_client.send_and_parse(builder).await
     }
 }

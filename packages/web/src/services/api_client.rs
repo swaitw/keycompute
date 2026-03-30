@@ -60,3 +60,35 @@ where
         other => other,
     }
 }
+
+/// 将 ClientError 转为用户友好的中文提示文本
+///
+/// 在 UI 层展示错误时调用，避免直接折射原始英文错误字符串给用户。
+#[allow(dead_code)]
+pub fn localize_error(err: &client_api::error::ClientError) -> String {
+    use client_api::error::ClientError;
+    match err {
+        ClientError::Unauthorized(_) => "登录已过期，请重新登录".to_string(),
+        ClientError::Forbidden(_) => "权限不足，无法执行此操作".to_string(),
+        ClientError::NotFound(_) => "资源不存在或已被删除".to_string(),
+        ClientError::RateLimited(_) => "请求过于频繁，请稍候再试".to_string(),
+        ClientError::Network(_) => "网络连接失败，请检查网络设置".to_string(),
+        ClientError::ServerError(_) => "服务器内部错误，请稍候重试".to_string(),
+        ClientError::ServiceUnavailable(_) => "服务暂时不可用，请稍候再试".to_string(),
+        ClientError::Serialization(_) | ClientError::InvalidResponse(_) => {
+            "数据解析失败，请刷新页面".to_string()
+        }
+        ClientError::Config(msg) => format!("配置错误：{}", msg),
+        ClientError::Http(msg) => {
+            // 尝试提取状态码后的消息部分
+            if msg.contains("400") {
+                "请求参数错误，请检查输入".to_string()
+            } else if msg.contains("409") {
+                "数据冲突，该资源可能已存在".to_string()
+            } else {
+                "请求失败，请稍候重试".to_string()
+            }
+        }
+        ClientError::Other(msg) => msg.clone(),
+    }
+}

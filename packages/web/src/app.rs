@@ -51,6 +51,7 @@ pub fn AppLayout() -> Element {
     let mut auth_store = use_context::<AuthStore>();
     let ui_store = use_context::<UiStore>();
     let nav = use_navigator();
+    let mut user_store_write = use_context::<UserStore>();
 
     // 同步检查认证状态：在渲染之前立即判断，未登录则渲染重定向占位符
     // 同时通过 use_effect 执行实际导航（Dioxus 要求导航在 effect 中进行）
@@ -149,6 +150,8 @@ pub fn AppLayout() -> Element {
                 UserMenuAction::Settings => { nav.push(Route::UserSettings {}); }
                 UserMenuAction::Logout => {
                     auth_store.logout();
+                    // 清空用户信息，避免登出后旧数据残留
+                    *user_store_write.info.write() = None;
                     nav.replace(Route::Login {});
                 }
             },
