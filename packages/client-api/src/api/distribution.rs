@@ -6,6 +6,8 @@ use crate::client::ApiClient;
 use crate::error::Result;
 use serde::{Deserialize, Serialize};
 
+pub use super::common::MessageResponse;
+
 /// 分销 API 客户端
 #[derive(Debug, Clone)]
 pub struct DistributionApi {
@@ -299,10 +301,4 @@ impl UpdateDistributionRuleRequest {
         self.is_active = Some(is_active);
         self
     }
-}
-
-/// 通用消息响应
-#[derive(Debug, Clone, Deserialize)]
-pub struct MessageResponse {
-    pub message: String,
 }

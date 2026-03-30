@@ -6,6 +6,8 @@ use crate::client::ApiClient;
 use crate::error::Result;
 use serde::{Deserialize, Serialize};
 
+pub use super::common::MessageResponse;
+
 /// API Key API 客户端
 #[derive(Debug, Clone)]
 pub struct ApiKeyApi {
@@ -87,10 +89,4 @@ pub struct CreateApiKeyResponse {
     pub key_preview: String,
     pub expires_at: Option<String>,
     pub created_at: String,
-}
-
-/// 通用消息响应
-#[derive(Debug, Clone, Deserialize)]
-pub struct MessageResponse {
-    pub message: String,
 }

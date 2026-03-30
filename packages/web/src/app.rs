@@ -151,3 +151,45 @@ pub fn AppLayout() -> Element {
         }
     }
 }
+
+/// Admin 专属路由守卫层
+///
+/// 嵌套在 AppLayout 内部，仅允许 admin 角色访问 /admin/* 页面。
+/// 非 admin 用户会被重定向到首页，同时显示无权提示。
+#[component]
+pub fn AdminLayout() -> Element {
+    let user_store = use_context::<UserStore>();
+    let mut ui_store = use_context::<UiStore>();
+    let nav = use_navigator();
+
+    let is_admin = user_store.is_admin();
+    // 用户信息已加载（info 不为 None）时才做判断，避免初始化闪屏
+    let info_loaded = user_store.info.read().is_some();
+
+    use_effect(move || {
+        if info_loaded && !user_store.is_admin() {
+            ui_store.show_error("权限不足：该页面仅管理员可访问");
+            nav.replace(Route::Dashboard {});
+        }
+    });
+
+    // 用户信息尚未加载完成，显示等待占位符
+    if !info_loaded {
+        return rsx! {
+            div {
+                class: "admin-guard-loading",
+                style: "display:flex;align-items:center;justify-content:center;padding:60px",
+                div { class: "spinner", style: "width:24px;height:24px" }
+            }
+        };
+    }
+
+    // 已加载但不是 admin，显示空内容（effect 会立即跳转）
+    if !is_admin {
+        return rsx! {};
+    }
+
+    rsx! {
+        Outlet::<Route> {}
+    }
+}

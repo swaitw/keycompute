@@ -6,6 +6,8 @@ use crate::client::ApiClient;
 use crate::error::Result;
 use serde::{Deserialize, Serialize};
 
+pub use super::common::MessageResponse;
+
 /// 用户 API 客户端
 #[derive(Debug, Clone)]
 pub struct UserApi {
@@ -91,10 +93,4 @@ impl ChangePasswordRequest {
             new_password: new_password.into(),
         }
     }
-}
-
-/// 通用消息响应
-#[derive(Debug, Clone, Deserialize)]
-pub struct MessageResponse {
-    pub message: String,
 }

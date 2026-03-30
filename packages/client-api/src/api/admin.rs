@@ -6,6 +6,8 @@ use crate::client::ApiClient;
 use crate::error::Result;
 use serde::{Deserialize, Serialize};
 
+pub use super::common::MessageResponse;
+
 /// 管理 API 客户端
 #[derive(Debug, Clone)]
 pub struct AdminApi {
@@ -640,10 +642,4 @@ pub struct PaymentOrderInfo {
     pub currency: String,
     pub status: String,
     pub created_at: String,
-}
-
-/// 通用消息响应
-#[derive(Debug, Clone, Deserialize)]
-pub struct MessageResponse {
-    pub message: String,
 }

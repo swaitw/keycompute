@@ -1,6 +1,6 @@
 use dioxus::prelude::*;
 
-use crate::app::AppLayout;
+use crate::app::{AdminLayout, AppLayout};
 use crate::views::{
     Billing, NotFound, Usage,
     api_keys::ApiKeyList,
@@ -50,23 +50,25 @@ pub enum Route {
         #[route("/user/settings")]
         UserSettings {},
 
-        // Admin / 管理功能页面
-        #[route("/admin/users")]
-        Users {},
-        #[route("/admin/accounts")]
-        Accounts {},
-        #[route("/admin/pricing")]
-        Pricing {},
-        #[route("/admin/payment-orders")]
-        PaymentOrders {},
-        #[route("/admin/distribution-records")]
-        DistributionRecords {},
-        #[route("/admin/tenants")]
-        Tenants {},
-        #[route("/admin/system")]
-        System {},
-        #[route("/admin/settings")]
-        Settings {},
+        // Admin 功能页面（额外加一层 AdminLayout 做角色验证）
+        #[layout(AdminLayout)]
+            #[route("/admin/users")]
+            Users {},
+            #[route("/admin/accounts")]
+            Accounts {},
+            #[route("/admin/pricing")]
+            Pricing {},
+            #[route("/admin/payment-orders")]
+            PaymentOrders {},
+            #[route("/admin/distribution-records")]
+            DistributionRecords {},
+            #[route("/admin/tenants")]
+            Tenants {},
+            #[route("/admin/system")]
+            System {},
+            #[route("/admin/settings")]
+            Settings {},
+        #[end_layout]
     #[end_layout]
 
     // 404
