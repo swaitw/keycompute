@@ -11,7 +11,7 @@ use crate::utils::time::format_time;
 /// 分销记录页面
 ///
 /// - 普通用户：查看自己的推荐用户明细（真实表格数据）
-/// - Admin：查看全平台分销记录，配置分销规则
+/// - Admin：查看全平台分销记录，展示分销规则（只读，当前由后端硬编码）
 #[component]
 pub fn DistributionRecords() -> Element {
     let user_store = use_context::<UserStore>();
@@ -58,6 +58,22 @@ pub fn DistributionRecords() -> Element {
         .await
     });
 
+    // Admin：分销规则列表（只读展示，后端硬编码）
+    let rules = use_resource(move || async move {
+        if !is_admin {
+            return Ok(vec![]);
+        }
+        with_auto_refresh(auth_store, |token| async move {
+            use crate::services::api_client::get_client;
+            use client_api::DistributionApi;
+            let client = get_client();
+            DistributionApi::new(&client)
+                .list_distribution_rules(&token)
+                .await
+        })
+        .await
+    });
+
     let total_earnings = match earnings() {
         Some(Ok(ref e)) => format!("¥{:.2}", e.total_earnings),
         _ => "¥ 0.00".to_string(),
@@ -77,7 +93,7 @@ pub fn DistributionRecords() -> Element {
         div { class: "page-header",
             h1 { class: "page-title", "分销记录" }
             p { class: "page-description",
-                if is_admin { "查看全平台分销收益记录，管理分销规则" }
+                if is_admin { "查看全平台分销收益记录，及当前生效的分销规则" }
                 else { "查看您通过邀请获得的分销收益明细" }
             }
         }
@@ -104,12 +120,53 @@ pub fn DistributionRecords() -> Element {
             }
         }
 
+        // 分销规则只读展示（Admin 可见）
         if is_admin {
-            div { class: "toolbar",
-                div { class: "toolbar-right",
-                    button { class: "btn btn-secondary btn-sm", r#type: "button",
-                        "分销规则配置"
+            div { class: "section",
+                h2 { class: "section-title", "分销规则（只读）" }
+                div { class: "alert alert-info", style: "margin-bottom: 12px",
+                    span { class: "alert-icon", "ℹ" }
+                    div { class: "alert-content",
+                        p { class: "alert-body",
+                            "分销规则由平台运营方统一配置，如需调整请联系系统管理员。"
+                        }
                     }
+                }
+                match rules() {
+                    None => rsx! { p { class: "text-secondary", "加载中..." } },
+                    Some(Err(_)) => rsx! { p { class: "text-secondary", "加载失败" } },
+                    Some(Ok(ref list)) if list.is_empty() => rsx! {
+                        p { class: "text-secondary", "当前无分销规则" }
+                    },
+                    Some(Ok(ref list)) => rsx! {
+                        Table {
+                            col_count: 4,
+                            thead {
+                                tr {
+                                    TableHead { "规则名称" }
+                                    TableHead { "分销比例" }
+                                    TableHead { "状态" }
+                                    TableHead { "创建时间" }
+                                }
+                            }
+                            tbody {
+                                for r in list.iter() {
+                                    tr {
+                                        td { "{r.name}" }
+                                        td { { format!("{:.1}%", r.commission_rate * 100.0) } }
+                                        td {
+                                            if r.is_active {
+                                                Badge { variant: BadgeVariant::Success, "已启用" }
+                                            } else {
+                                                Badge { variant: BadgeVariant::Neutral, "已禁用" }
+                                            }
+                                        }
+                                        td { { format_time(&r.created_at) } }
+                                    }
+                                }
+                            }
+                        }
+                    },
                 }
             }
         }

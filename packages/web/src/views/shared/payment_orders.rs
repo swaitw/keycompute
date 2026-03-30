@@ -84,7 +84,7 @@ pub fn PaymentOrders() -> Element {
         div { class: "toolbar",
             div { class: "toolbar-left",
                 div { class: "filter-tabs",
-                    for (val, label) in [("all", "全部"), ("pending", "待支付"), ("paid", "已支付"), ("failed", "已失败"), ("refunded", "已退款")] {
+                    for (val, label) in [("all", "全部"), ("pending", "待支付"), ("paid", "已支付"), ("failed", "已失败")] {
                         button {
                             class: if status_filter() == val { "filter-tab active" } else { "filter-tab" },
                             r#type: "button",
@@ -220,7 +220,6 @@ fn status_to_variant(status: &str) -> BadgeVariant {
         "paid" | "success" => BadgeVariant::Success,
         "pending" | "processing" => BadgeVariant::Warning,
         "failed" | "cancelled" => BadgeVariant::Error,
-        "refunded" => BadgeVariant::Info,
         _ => BadgeVariant::Neutral,
     }
 }

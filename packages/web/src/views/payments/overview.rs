@@ -222,7 +222,6 @@ fn payment_status_variant(status: &str) -> BadgeVariant {
         "paid" | "success" => BadgeVariant::Success,
         "pending" | "processing" => BadgeVariant::Warning,
         "failed" | "cancelled" => BadgeVariant::Error,
-        "refunded" => BadgeVariant::Info,
         _ => BadgeVariant::Neutral,
     }
 }
