@@ -302,14 +302,18 @@ fn get_base_url(headers: &axum::http::HeaderMap) -> String {
             .get("x-forwarded-proto")
             .and_then(|h| h.to_str().ok())
             .unwrap_or("http");
-        return format!("{}://{}:8080", scheme, host.split(':').next().unwrap_or(host));
+        return format!(
+            "{}://{}:8080",
+            scheme,
+            host.split(':').next().unwrap_or(host)
+        );
     }
-    
+
     // 其次从环境变量获取
     if let Ok(url) = std::env::var("APP_BASE_URL") {
         return url;
     }
-    
+
     // 最后使用默认值
     "https://127.0.0.1:8080".to_string()
 }
@@ -472,7 +476,7 @@ pub async fn list_distribution_rules(
             id: r.id.to_string(),
             name: r.name,
             commission_rate: r.commission_rate.to_string().parse().unwrap_or(0.0),
-            min_purchase_amount: None, // 数据库模型中暂无此字段
+            min_purchase_amount: None,   // 数据库模型中暂无此字段
             max_commission_amount: None, // 数据库模型中暂无此字段
             is_active: r.is_active,
             created_at: r.created_at.to_rfc3339(),
@@ -587,7 +591,11 @@ pub async fn update_distribution_rule(
         id: updated_rule.id.to_string(),
         name: updated_rule.name,
         commission_rate: req.commission_rate.unwrap_or_else(|| {
-            updated_rule.commission_rate.to_string().parse().unwrap_or(0.0)
+            updated_rule
+                .commission_rate
+                .to_string()
+                .parse()
+                .unwrap_or(0.0)
         }),
         min_purchase_amount: req.min_purchase_amount,
         max_commission_amount: req.max_commission_amount,

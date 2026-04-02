@@ -23,12 +23,11 @@ async fn test_get_my_distribution_earnings_success() {
     Mock::given(method("GET"))
         .and(path("/api/v1/me/distribution/earnings"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "total_earnings": 150.50,
-            "available_earnings": 50.00,
-            "withdrawn_earnings": 80.00,
-            "pending_earnings": 20.50,
+            "total_earnings": "150.50",
+            "settled_amount": "50.00",
+            "pending_amount": "20.50",
             "currency": "USD",
-            "referral_count": 5
+            "level1_referrals": 5
         })))
         .mount(&mock_server)
         .await;
@@ -39,8 +38,8 @@ async fn test_get_my_distribution_earnings_success() {
 
     assert!(result.is_ok());
     let earnings = result.unwrap();
-    assert_eq!(earnings.total_earnings, 150.50);
-    assert_eq!(earnings.available_earnings, 50.00);
+    assert_eq!(earnings.total_earnings, "150.50");
+    assert_eq!(earnings.available_earnings, "50.00");
     assert_eq!(earnings.referral_count, 5);
 }
 
@@ -52,12 +51,11 @@ async fn test_get_my_distribution_earnings_new_user() {
     Mock::given(method("GET"))
         .and(path("/api/v1/me/distribution/earnings"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "total_earnings": 0.0,
-            "available_earnings": 0.0,
-            "withdrawn_earnings": 0.0,
-            "pending_earnings": 0.0,
+            "total_earnings": "0.0",
+            "settled_amount": "0.0",
+            "pending_amount": "0.0",
             "currency": "USD",
-            "referral_count": 0
+            "level1_referrals": 0
         })))
         .mount(&mock_server)
         .await;
@@ -68,7 +66,7 @@ async fn test_get_my_distribution_earnings_new_user() {
 
     assert!(result.is_ok());
     let earnings = result.unwrap();
-    assert_eq!(earnings.total_earnings, 0.0);
+    assert_eq!(earnings.total_earnings, "0.0");
     assert_eq!(earnings.referral_count, 0);
 }
 
@@ -84,17 +82,17 @@ async fn test_get_my_referrals_success() {
                 "id": "user_ref_001",
                 "email": "referred1@example.com",
                 "name": "Referred User 1",
-                "joined_at": "2024-01-15T10:00:00Z",
-                "total_spent": 100.0,
-                "earnings_from_referral": 10.0
+                "created_at": "2024-01-15T10:00:00Z",
+                "total_consumption": "100.0",
+                "earnings": "10.0"
             },
             {
                 "id": "user_ref_002",
                 "email": "referred2@example.com",
                 "name": null,
-                "joined_at": "2024-01-10T08:00:00Z",
-                "total_spent": 50.0,
-                "earnings_from_referral": 5.0
+                "created_at": "2024-01-10T08:00:00Z",
+                "total_consumption": "50.0",
+                "earnings": "5.0"
             }
         ])))
         .mount(&mock_server)
@@ -108,7 +106,7 @@ async fn test_get_my_referrals_success() {
     let referrals = result.unwrap();
     assert_eq!(referrals.len(), 2);
     assert_eq!(referrals[0].email, "referred1@example.com");
-    assert_eq!(referrals[0].earnings_from_referral, 10.0);
+    assert_eq!(referrals[0].earnings_from_referral, "10.0");
 }
 
 #[tokio::test]
@@ -139,7 +137,7 @@ async fn test_get_my_referral_code_success() {
         .and(path("/api/v1/me/referral/code"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "referral_code": "ABC123XYZ",
-            "referral_link": "https://keycompute.com/register?ref=ABC123XYZ"
+            "invite_link": "https://keycompute.com/register?ref=ABC123XYZ"
         })))
         .mount(&mock_server)
         .await;

@@ -25,12 +25,10 @@ impl BillingApi {
     }
 
     /// 获取用量记录列表（真实数据，从 usage_logs 表查询）
-    /// 
+    ///
     /// 调用 /api/v1/usage 获取当前用户的真实用量记录
     pub async fn list_usage_records(&self, token: &str) -> Result<Vec<UsageRecord>> {
-        self.client
-            .get_json("/api/v1/usage", Some(token))
-            .await
+        self.client.get_json("/api/v1/usage", Some(token)).await
     }
 
     /// 获取用量统计（真实数据，从 usage_logs 表聚合）

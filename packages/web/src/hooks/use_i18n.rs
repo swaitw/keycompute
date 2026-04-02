@@ -16,6 +16,6 @@ pub fn use_i18n() -> I18n {
             }
         })
         .unwrap_or(Lang::Zh); // 默认中文
-    
+
     I18n::new(lang)
 }

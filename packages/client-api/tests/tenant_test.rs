@@ -19,23 +19,26 @@ async fn test_list_tenants_success() {
             {
                 "id": "tenant_001",
                 "name": "Acme Corporation",
-                "status": "active",
-                "created_at": "2024-01-01T00:00:00Z",
-                "updated_at": "2024-01-15T00:00:00Z"
+                "description": "Test tenant 1",
+                "user_count": 10,
+                "is_active": true,
+                "created_at": "2024-01-01T00:00:00Z"
             },
             {
                 "id": "tenant_002",
                 "name": "TechStart Inc",
-                "status": "active",
-                "created_at": "2024-01-10T00:00:00Z",
-                "updated_at": "2024-01-20T00:00:00Z"
+                "description": "Test tenant 2",
+                "user_count": 5,
+                "is_active": true,
+                "created_at": "2024-01-10T00:00:00Z"
             },
             {
                 "id": "tenant_003",
                 "name": "Global Solutions",
-                "status": "suspended",
-                "created_at": "2023-12-01T00:00:00Z",
-                "updated_at": "2024-01-05T00:00:00Z"
+                "description": "Test tenant 3",
+                "user_count": 2,
+                "is_active": false,
+                "created_at": "2023-12-01T00:00:00Z"
             }
         ])))
         .mount(&mock_server)
@@ -49,8 +52,8 @@ async fn test_list_tenants_success() {
     let tenants = result.unwrap();
     assert_eq!(tenants.len(), 3);
     assert_eq!(tenants[0].name, "Acme Corporation");
-    assert_eq!(tenants[0].status, "active");
-    assert_eq!(tenants[2].status, "suspended");
+    assert!(tenants[0].is_active);
+    assert!(!tenants[2].is_active);
 }
 
 #[tokio::test]
@@ -83,9 +86,10 @@ async fn test_list_tenants_with_pagination() {
             {
                 "id": "tenant_004",
                 "name": "Test Tenant",
-                "status": "active",
-                "created_at": "2024-01-20T00:00:00Z",
-                "updated_at": "2024-01-20T00:00:00Z"
+                "description": "Test tenant 4",
+                "user_count": 1,
+                "is_active": true,
+                "created_at": "2024-01-20T00:00:00Z"
             }
         ])))
         .mount(&mock_server)

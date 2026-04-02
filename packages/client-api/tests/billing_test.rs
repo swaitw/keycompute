@@ -1,4 +1,5 @@
 //! 账单模块集成测试
+#![allow(deprecated)]
 
 use client_api::api::billing::{BillingApi, BillingQueryParams};
 use client_api::error::ClientError;
@@ -15,28 +16,35 @@ async fn test_list_billing_records_success() {
 
     Mock::given(method("GET"))
         .and(path("/api/v1/billing/records"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
-            {
-                "id": "bill_001",
-                "user_id": fixtures::TEST_USER_ID,
-                "amount": 1.2345,
-                "currency": "USD",
-                "description": "API Usage - Jan 2024",
-                "status": "paid",
-                "created_at": "2024-01-31T23:59:59Z",
-                "paid_at": "2024-01-31T23:59:59Z"
-            },
-            {
-                "id": "bill_002",
-                "user_id": fixtures::TEST_USER_ID,
-                "amount": 10.0,
-                "currency": "USD",
-                "description": "Account recharge",
-                "status": "completed",
-                "created_at": "2024-01-15T10:00:00Z",
-                "paid_at": "2024-01-15T10:05:00Z"
-            }
-        ])))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "records": [
+                {
+                    "id": "bill_001",
+                    "request_id": fixtures::TEST_USER_ID,
+                    "model_name": "gpt-4",
+                    "provider_name": "openai",
+                    "input_tokens": 100,
+                    "output_tokens": 50,
+                    "user_amount": "1.2345",
+                    "currency": "USD",
+                    "status": "paid",
+                    "created_at": "2024-01-31T23:59:59Z"
+                },
+                {
+                    "id": "bill_002",
+                    "request_id": fixtures::TEST_USER_ID,
+                    "model_name": "gpt-3.5-turbo",
+                    "provider_name": "openai",
+                    "input_tokens": 200,
+                    "output_tokens": 100,
+                    "user_amount": "10.0",
+                    "currency": "USD",
+                    "status": "completed",
+                    "created_at": "2024-01-15T10:00:00Z"
+                }
+            ],
+            "total": 2
+        })))
         .mount(&mock_server)
         .await;
 
@@ -48,7 +56,7 @@ async fn test_list_billing_records_success() {
     let records = result.unwrap();
     assert_eq!(records.len(), 2);
     assert_eq!(records[0].id, "bill_001");
-    assert_eq!(records[0].amount, 1.2345);
+    assert_eq!(records[0].amount, "1.2345");
 }
 
 #[tokio::test]
@@ -61,7 +69,10 @@ async fn test_list_billing_records_with_filters() {
         .and(query_param("start_date", "2024-01-01"))
         .and(query_param("end_date", "2024-01-31"))
         .and(query_param("limit", "10"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "records": [],
+            "total": 0
+        })))
         .mount(&mock_server)
         .await;
 
@@ -105,11 +116,12 @@ async fn test_get_billing_stats_success() {
     Mock::given(method("GET"))
         .and(path("/api/v1/billing/stats"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "total_amount": 150.50,
-            "total_paid": 100.0,
-            "total_unpaid": 50.50,
+            "total_requests": 100,
+            "total_input_tokens": 10000,
+            "total_output_tokens": 5000,
+            "total_amount": "150.50",
             "currency": "USD",
-            "period": "monthly"
+            "by_model": []
         })))
         .mount(&mock_server)
         .await;
@@ -120,8 +132,8 @@ async fn test_get_billing_stats_success() {
 
     assert!(result.is_ok());
     let stats = result.unwrap();
-    assert_eq!(stats.total_amount, 150.50);
-    assert_eq!(stats.total_paid, 100.0);
+    assert_eq!(stats.total_cost, "150.50");
+    assert_eq!(stats.total_requests, 100);
     assert_eq!(stats.currency, "USD");
 }
 
@@ -133,11 +145,12 @@ async fn test_get_billing_stats_new_user() {
     Mock::given(method("GET"))
         .and(path("/api/v1/billing/stats"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "total_amount": 0.0,
-            "total_paid": 0.0,
-            "total_unpaid": 0.0,
+            "total_requests": 0,
+            "total_input_tokens": 0,
+            "total_output_tokens": 0,
+            "total_amount": "0.0",
             "currency": "USD",
-            "period": "monthly"
+            "by_model": []
         })))
         .mount(&mock_server)
         .await;
@@ -148,6 +161,6 @@ async fn test_get_billing_stats_new_user() {
 
     assert!(result.is_ok());
     let stats = result.unwrap();
-    assert_eq!(stats.total_amount, 0.0);
-    assert_eq!(stats.total_paid, 0.0);
+    assert_eq!(stats.total_cost, "0.0");
+    assert_eq!(stats.total_requests, 0);
 }

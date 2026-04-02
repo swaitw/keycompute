@@ -58,7 +58,9 @@ where
                     // 刷新失败，强制登出
                     auth_store.logout();
                     get_client().clear_token();
-                    Err(ClientError::Unauthorized("登录已过期，请重新登录".to_string()))
+                    Err(ClientError::Unauthorized(
+                        "登录已过期，请重新登录".to_string(),
+                    ))
                 }
             }
         }

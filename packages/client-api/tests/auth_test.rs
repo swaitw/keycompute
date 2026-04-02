@@ -22,16 +22,13 @@ async fn test_login_success() {
     Mock::given(method("POST"))
         .and(path("/auth/login"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "user_id": fixtures::TEST_USER_ID,
+            "tenant_id": "tenant_001",
+            "email": fixtures::TEST_EMAIL,
+            "role": "user",
             "access_token": fixtures::TEST_ACCESS_TOKEN,
-            "refresh_token": fixtures::TEST_REFRESH_TOKEN,
             "token_type": "Bearer",
-            "expires_in": 3600,
-            "user": {
-                "id": fixtures::TEST_USER_ID,
-                "email": fixtures::TEST_EMAIL,
-                "name": "Test User",
-                "role": "user"
-            }
+            "expires_in": 3600
         })))
         .mount(&mock_server)
         .await;
@@ -44,7 +41,7 @@ async fn test_login_success() {
     assert!(result.is_ok());
     let resp = result.unwrap();
     assert_eq!(resp.access_token, fixtures::TEST_ACCESS_TOKEN);
-    assert_eq!(resp.user.email, fixtures::TEST_EMAIL);
+    assert_eq!(resp.email, fixtures::TEST_EMAIL);
 }
 
 #[tokio::test]
@@ -82,16 +79,13 @@ async fn test_register_success() {
         .and(path("/auth/register"))
         .and(body_json(&expected_body))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "user_id": "user_new_001",
+            "tenant_id": "tenant_001",
+            "email": "new@example.com",
+            "role": "user",
             "access_token": fixtures::TEST_ACCESS_TOKEN,
-            "refresh_token": fixtures::TEST_REFRESH_TOKEN,
             "token_type": "Bearer",
-            "expires_in": 3600,
-            "user": {
-                "id": "user_new_001",
-                "email": "new@example.com",
-                "name": "New User",
-                "role": "user"
-            }
+            "expires_in": 3600
         })))
         .mount(&mock_server)
         .await;
@@ -101,7 +95,7 @@ async fn test_register_success() {
 
     assert!(result.is_ok());
     let resp = result.unwrap();
-    assert_eq!(resp.user.name, Some("New User".to_string()));
+    assert_eq!(resp.email, "new@example.com");
 }
 
 #[tokio::test]
@@ -169,16 +163,13 @@ async fn test_refresh_token_success() {
     Mock::given(method("POST"))
         .and(path("/auth/refresh-token"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "user_id": fixtures::TEST_USER_ID,
+            "tenant_id": "tenant_001",
+            "email": fixtures::TEST_EMAIL,
+            "role": "user",
             "access_token": "new_access_token_999",
-            "refresh_token": "new_refresh_token_888",
             "token_type": "Bearer",
-            "expires_in": 3600,
-            "user": {
-                "id": fixtures::TEST_USER_ID,
-                "email": fixtures::TEST_EMAIL,
-                "name": "Test User",
-                "role": "user"
-            }
+            "expires_in": 3600
         })))
         .mount(&mock_server)
         .await;

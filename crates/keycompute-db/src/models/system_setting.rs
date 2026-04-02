@@ -302,7 +302,11 @@ impl SystemSetting {
             (setting_keys::DEFAULT_TPM_LIMIT, "10000", "int"),
             // 系统状态
             (setting_keys::MAINTENANCE_MODE, "false", "bool"),
-            (setting_keys::MAINTENANCE_MESSAGE, "系统维护中，请稍后再试", "string"),
+            (
+                setting_keys::MAINTENANCE_MESSAGE,
+                "系统维护中，请稍后再试",
+                "string",
+            ),
             // 支付设置
             (setting_keys::MIN_RECHARGE_AMOUNT, "1.0", "decimal"),
             (setting_keys::MAX_RECHARGE_AMOUNT, "10000.0", "decimal"),
@@ -315,9 +319,17 @@ impl SystemSetting {
             (setting_keys::SYSTEM_NOTICE_ENABLED, "false", "bool"),
             // 分销设置 - 默认分销比例 (与 RuleEngine 硬编码保持一致)
             (setting_keys::DISTRIBUTION_ENABLED, "true", "bool"),
-            (setting_keys::DISTRIBUTION_LEVEL1_DEFAULT_RATIO, "0.03", "decimal"),  // 一级分销默认 3%
-            (setting_keys::DISTRIBUTION_LEVEL2_DEFAULT_RATIO, "0.02", "decimal"),  // 二级分销默认 2%
-            (setting_keys::DISTRIBUTION_MIN_WITHDRAW, "100.0", "decimal"),         // 最小提现金额 100元
+            (
+                setting_keys::DISTRIBUTION_LEVEL1_DEFAULT_RATIO,
+                "0.03",
+                "decimal",
+            ), // 一级分销默认 3%
+            (
+                setting_keys::DISTRIBUTION_LEVEL2_DEFAULT_RATIO,
+                "0.02",
+                "decimal",
+            ), // 二级分销默认 2%
+            (setting_keys::DISTRIBUTION_MIN_WITHDRAW, "100.0", "decimal"), // 最小提现金额 100元
         ];
 
         for (key, value, value_type) in defaults {

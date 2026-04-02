@@ -39,7 +39,7 @@ use uuid::Uuid;
 /// 直接创建连接池，不使用全局 OnceCell（避免多次初始化错误）
 async fn create_test_pool() -> PgPool {
     let database_url = std::env::var("DATABASE_URL")
-        .unwrap_or_else(|_| "postgres://localhost/keycompute".to_string());
+        .unwrap_or_else(|_| "postgres://postgres:password@localhost:5432/keycompute".to_string());
 
     let pool = PgPoolOptions::new()
         .max_connections(20)
@@ -178,7 +178,7 @@ async fn test_database_manager() {
 
     // 直接使用 PgPoolOptions 创建连接池
     let database_url = std::env::var("DATABASE_URL")
-        .unwrap_or_else(|_| "postgres://localhost/keycompute".to_string());
+        .unwrap_or_else(|_| "postgres://postgres:password@localhost:5432/keycompute".to_string());
 
     let pool = PgPoolOptions::new()
         .max_connections(5)

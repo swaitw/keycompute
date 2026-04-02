@@ -131,7 +131,7 @@ pub fn System() -> Element {
                 div { class: "card-body",
                     match routing_info() {
                         None => rsx! { p { class: "text-secondary", "加载中..." } },
-                        Some(Err(ref e)) => rsx! { 
+                        Some(Err(ref e)) => rsx! {
                             div { class: "alert alert-error",
                                 p { "加载失败: {e}" }
                             }

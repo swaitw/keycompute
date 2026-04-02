@@ -119,24 +119,29 @@ async fn test_list_my_payment_orders_success() {
 
     Mock::given(method("GET"))
         .and(path("/api/v1/payments/orders"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
-            {
-                "id": "order_001",
-                "out_trade_no": "PAY202401200001",
-                "amount": 10.0,
-                "currency": "USD",
-                "status": "paid",
-                "created_at": "2024-01-20T10:00:00Z"
-            },
-            {
-                "id": "order_002",
-                "out_trade_no": "PAY202401190001",
-                "amount": 50.0,
-                "currency": "USD",
-                "status": "pending",
-                "created_at": "2024-01-19T10:00:00Z"
-            }
-        ])))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "orders": [
+                {
+                    "id": "order_001",
+                    "out_trade_no": "PAY202401200001",
+                    "amount": "10.0",
+                    "status": "paid",
+                    "subject": "Account Recharge",
+                    "created_at": "2024-01-20T10:00:00Z",
+                    "expired_at": "2024-01-20T11:00:00Z"
+                },
+                {
+                    "id": "order_002",
+                    "out_trade_no": "PAY202401190001",
+                    "amount": "50.0",
+                    "status": "pending",
+                    "subject": "Account Recharge",
+                    "created_at": "2024-01-19T10:00:00Z",
+                    "expired_at": "2024-01-19T11:00:00Z"
+                }
+            ],
+            "total": 2
+        })))
         .mount(&mock_server)
         .await;
 
@@ -158,7 +163,10 @@ async fn test_list_my_payment_orders_with_status_filter() {
 
     Mock::given(method("GET"))
         .and(path("/api/v1/payments/orders"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "orders": [],
+            "total": 0
+        })))
         .mount(&mock_server)
         .await;
 
@@ -263,9 +271,12 @@ async fn test_get_my_balance_success() {
     Mock::given(method("GET"))
         .and(path("/api/v1/payments/balance"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "balance": 49.8766,
-            "currency": "USD",
-            "frozen_balance": 0.0
+            "user_id": fixtures::TEST_USER_ID,
+            "available_balance": "49.8766",
+            "frozen_balance": "0.0",
+            "total_balance": "49.8766",
+            "total_recharged": "100.0",
+            "total_consumed": "50.1234"
         })))
         .mount(&mock_server)
         .await;
@@ -276,9 +287,8 @@ async fn test_get_my_balance_success() {
 
     assert!(result.is_ok());
     let balance = result.unwrap();
-    assert_eq!(balance.balance, 49.8766);
-    assert_eq!(balance.currency, "USD");
-    assert_eq!(balance.frozen_balance, 0.0);
+    assert_eq!(balance.available_balance, "49.8766");
+    assert_eq!(balance.frozen_balance, "0.0");
 }
 
 #[tokio::test]
@@ -289,9 +299,12 @@ async fn test_get_my_balance_zero() {
     Mock::given(method("GET"))
         .and(path("/api/v1/payments/balance"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "balance": 0.0,
-            "currency": "USD",
-            "frozen_balance": 0.0
+            "user_id": fixtures::TEST_USER_ID,
+            "available_balance": "0.0",
+            "frozen_balance": "0.0",
+            "total_balance": "0.0",
+            "total_recharged": "0.0",
+            "total_consumed": "0.0"
         })))
         .mount(&mock_server)
         .await;
@@ -301,5 +314,5 @@ async fn test_get_my_balance_zero() {
         .await;
 
     assert!(result.is_ok());
-    assert_eq!(result.unwrap().balance, 0.0);
+    assert_eq!(result.unwrap().available_balance, "0.0");
 }

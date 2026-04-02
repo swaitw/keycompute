@@ -11,8 +11,9 @@
 use keycompute_auth::PasswordHasher;
 use keycompute_config::AppConfig;
 use keycompute_db::{
-    CreateDistributionRuleRequest, CreateTenantRequest, CreateUserCredentialRequest, CreateUserRequest,
-    DatabaseConfig as DbConfig, DatabaseManager, SystemSetting, Tenant, TenantDistributionRule, User,
+    CreateDistributionRuleRequest, CreateTenantRequest, CreateUserCredentialRequest,
+    CreateUserRequest, DatabaseConfig as DbConfig, DatabaseManager, SystemSetting, Tenant,
+    TenantDistributionRule, User,
 };
 use keycompute_observability::{init_dev_observability, init_observability};
 use keycompute_server::{AppState, AppStateConfig, init_global_crypto, run};
@@ -192,8 +193,10 @@ fn setup_shutdown_handler() -> tokio::sync::oneshot::Receiver<()> {
 /// - KC__DEFAULT_ADMIN_PASSWORD: 管理员密码
 async fn initialize_default_admin(pool: &sqlx::PgPool) -> anyhow::Result<()> {
     // 从环境变量读取配置
-    let admin_email = std::env::var("KC__DEFAULT_ADMIN_EMAIL").unwrap_or_else(|_| "admin@keycompute.local".to_string());
-    let admin_password = std::env::var("KC__DEFAULT_ADMIN_PASSWORD").unwrap_or_else(|_| "12345".to_string());
+    let admin_email = std::env::var("KC__DEFAULT_ADMIN_EMAIL")
+        .unwrap_or_else(|_| "admin@keycompute.local".to_string());
+    let admin_password =
+        std::env::var("KC__DEFAULT_ADMIN_PASSWORD").unwrap_or_else(|_| "12345".to_string());
 
     info!(email = %admin_email, "检查默认管理员账户");
 
@@ -206,24 +209,32 @@ async fn initialize_default_admin(pool: &sqlx::PgPool) -> anyhow::Result<()> {
     info!(email = %admin_email, "创建默认系统管理员");
 
     // 创建默认租户
-    let tenant = Tenant::create(pool, &CreateTenantRequest {
-        name: "System".to_string(),
-        slug: "system".to_string(),
-        description: Some("System default tenant".to_string()),
-        default_rpm_limit: None,
-        default_tpm_limit: None,
-        distribution_enabled: None,
-    }).await?;
+    let tenant = Tenant::create(
+        pool,
+        &CreateTenantRequest {
+            name: "System".to_string(),
+            slug: "system".to_string(),
+            description: Some("System default tenant".to_string()),
+            default_rpm_limit: None,
+            default_tpm_limit: None,
+            distribution_enabled: None,
+        },
+    )
+    .await?;
 
     info!(tenant_id = %tenant.id, "默认租户创建成功");
 
     // 创建管理员用户（role="system" 表示系统管理员）
-    let user = User::create(pool, &CreateUserRequest {
-        tenant_id: tenant.id,
-        email: admin_email.clone(),
-        name: Some("System Administrator".to_string()),
-        role: Some("system".to_string()),
-    }).await?;
+    let user = User::create(
+        pool,
+        &CreateUserRequest {
+            tenant_id: tenant.id,
+            email: admin_email.clone(),
+            name: Some("System Administrator".to_string()),
+            role: Some("system".to_string()),
+        },
+    )
+    .await?;
 
     info!(user_id = %user.id, "管理员用户创建成功");
 
@@ -232,18 +243,27 @@ async fn initialize_default_admin(pool: &sqlx::PgPool) -> anyhow::Result<()> {
     let password_hash = hasher.hash(&admin_password)?;
 
     // 创建用户凭证
-    let credential = keycompute_db::UserCredential::create(pool, &CreateUserCredentialRequest {
-        user_id: user.id,
-        password_hash,
-    }).await?;
+    let credential = keycompute_db::UserCredential::create(
+        pool,
+        &CreateUserCredentialRequest {
+            user_id: user.id,
+            password_hash,
+        },
+    )
+    .await?;
 
     // 标记邮箱已验证
     use keycompute_db::UpdateUserCredentialRequest;
-    credential.update(pool, &UpdateUserCredentialRequest {
-        email_verified: Some(true),
-        email_verified_at: Some(chrono::Utc::now()),
-        ..Default::default()
-    }).await?;
+    credential
+        .update(
+            pool,
+            &UpdateUserCredentialRequest {
+                email_verified: Some(true),
+                email_verified_at: Some(chrono::Utc::now()),
+                ..Default::default()
+            },
+        )
+        .await?;
 
     // 创建默认分销规则（基于系统设置中的比例）
     initialize_default_distribution_rules(pool, tenant.id, user.id).await?;
@@ -277,20 +297,16 @@ async fn initialize_default_distribution_rules(
     }
 
     // 从系统设置获取默认分销比例（与 RuleEngine 硬编码保持一致：3% 和 2%）
-    let level1_ratio_str = SystemSetting::get_string(
-        pool,
-        "distribution_level1_default_ratio",
-        "0.03",
-    ).await;
+    let level1_ratio_str =
+        SystemSetting::get_string(pool, "distribution_level1_default_ratio", "0.03").await;
 
-    let level2_ratio_str = SystemSetting::get_string(
-        pool,
-        "distribution_level2_default_ratio",
-        "0.02",
-    ).await;
+    let level2_ratio_str =
+        SystemSetting::get_string(pool, "distribution_level2_default_ratio", "0.02").await;
 
-    let level1_ratio = BigDecimal::from_str(&level1_ratio_str).unwrap_or_else(|_| BigDecimal::from_str("0.03").unwrap());
-    let level2_ratio = BigDecimal::from_str(&level2_ratio_str).unwrap_or_else(|_| BigDecimal::from_str("0.02").unwrap());
+    let level1_ratio = BigDecimal::from_str(&level1_ratio_str)
+        .unwrap_or_else(|_| BigDecimal::from_str("0.03").unwrap());
+    let level2_ratio = BigDecimal::from_str(&level2_ratio_str)
+        .unwrap_or_else(|_| BigDecimal::from_str("0.02").unwrap());
 
     info!(
         tenant_id = %tenant_id,

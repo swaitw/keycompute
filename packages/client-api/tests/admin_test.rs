@@ -20,28 +20,36 @@ async fn test_list_all_users_success() {
 
     Mock::given(method("GET"))
         .and(path("/api/v1/users"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
-            {
-                "id": "user_001",
-                "email": "admin@example.com",
-                "name": "Admin User",
-                "role": "admin",
-                "tenant_id": "tenant_001",
-                "balance": 100.0,
-                "created_at": "2024-01-01T00:00:00Z",
-                "updated_at": "2024-01-15T00:00:00Z"
-            },
-            {
-                "id": "user_002",
-                "email": "user@example.com",
-                "name": "Regular User",
-                "role": "user",
-                "tenant_id": "tenant_001",
-                "balance": 50.0,
-                "created_at": "2024-01-10T00:00:00Z",
-                "updated_at": "2024-01-20T00:00:00Z"
-            }
-        ])))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "users": [
+                {
+                    "id": "user_001",
+                    "email": "admin@example.com",
+                    "name": "Admin User",
+                    "role": "admin",
+                    "tenant_id": "tenant_001",
+                    "balance": 100.0,
+                    "created_at": "2024-01-01T00:00:00Z",
+                    "updated_at": "2024-01-15T00:00:00Z",
+                    "last_login_at": null
+                },
+                {
+                    "id": "user_002",
+                    "email": "user@example.com",
+                    "name": "Regular User",
+                    "role": "user",
+                    "tenant_id": "tenant_001",
+                    "balance": 50.0,
+                    "created_at": "2024-01-10T00:00:00Z",
+                    "updated_at": "2024-01-20T00:00:00Z",
+                    "last_login_at": null
+                }
+            ],
+            "total": 2,
+            "page": 1,
+            "page_size": 10,
+            "total_pages": 1
+        })))
         .mount(&mock_server)
         .await;
 
@@ -51,9 +59,9 @@ async fn test_list_all_users_success() {
 
     assert!(result.is_ok());
     let users = result.unwrap();
-    assert_eq!(users.len(), 2);
-    assert_eq!(users[0].email, "admin@example.com");
-    assert_eq!(users[0].role, "admin");
+    assert_eq!(users.users.len(), 2);
+    assert_eq!(users.users[0].email, "admin@example.com");
+    assert_eq!(users.users[0].role, "admin");
 }
 
 #[tokio::test]
@@ -177,19 +185,31 @@ async fn test_list_accounts_success() {
                 "id": "account_001",
                 "name": "OpenAI Account",
                 "provider": "openai",
-                "status": "active",
+                "api_key_preview": "sk-xxx...",
+                "base_url": null,
+                "models": ["gpt-4", "gpt-3.5-turbo"],
+                "rpm_limit": 60,
+                "current_rpm": 10,
                 "is_active": true,
+                "is_healthy": true,
+                "priority": 1,
                 "created_at": "2024-01-01T00:00:00Z",
-                "updated_at": "2024-01-01T00:00:00Z"
+                "last_used_at": null
             },
             {
                 "id": "account_002",
                 "name": "Anthropic Account",
                 "provider": "anthropic",
-                "status": "active",
+                "api_key_preview": "sk-ant-xxx...",
+                "base_url": null,
+                "models": ["claude-3-opus"],
+                "rpm_limit": 30,
+                "current_rpm": 5,
                 "is_active": true,
+                "is_healthy": true,
+                "priority": 2,
                 "created_at": "2024-01-10T00:00:00Z",
-                "updated_at": "2024-01-10T00:00:00Z"
+                "last_used_at": null
             }
         ])))
         .mount(&mock_server)
@@ -216,10 +236,16 @@ async fn test_create_account_success() {
             "id": "account_new_001",
             "name": "New Gemini Account",
             "provider": "gemini",
-            "status": "active",
+            "api_key_preview": "AIza...",
+            "base_url": null,
+            "models": ["gemini-pro"],
+            "rpm_limit": 60,
+            "current_rpm": 0,
             "is_active": true,
+            "is_healthy": true,
+            "priority": 1,
             "created_at": "2024-01-20T00:00:00Z",
-            "updated_at": "2024-01-20T00:00:00Z"
+            "last_used_at": null
         })))
         .mount(&mock_server)
         .await;

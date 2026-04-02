@@ -43,7 +43,9 @@ async fn test_debug_routing_success() {
         .mount(&mock_server)
         .await;
 
-    let result = debug_api.debug_routing("gpt-4o", fixtures::TEST_ACCESS_TOKEN).await;
+    let result = debug_api
+        .debug_routing("gpt-4o", fixtures::TEST_ACCESS_TOKEN)
+        .await;
 
     assert!(result.is_ok());
     let info = result.unwrap();

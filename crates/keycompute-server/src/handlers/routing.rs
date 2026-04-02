@@ -112,12 +112,7 @@ pub async fn debug_routing(
     };
 
     // 3. 获取所有配置的 provider 列表
-    let all_providers: Vec<String> = state
-        .routing
-        .configured_providers()
-        .iter()
-        .cloned()
-        .collect();
+    let all_providers: Vec<String> = state.routing.configured_providers().to_vec();
     let healthy_providers = state.routing.healthy_providers();
     let healthy_set: std::collections::HashSet<String> =
         healthy_providers.iter().cloned().collect();

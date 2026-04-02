@@ -49,12 +49,13 @@ impl ClientConfig {
     /// 验证配置是否有效
     pub fn validate(&self) -> Result<()> {
         // 允许空字符串（表示使用相对路径，适用于 Nginx 反向代理场景）
-        if !self.base_url.is_empty() {
-            if !self.base_url.starts_with("http://") && !self.base_url.starts_with("https://") {
-                return Err(ClientError::Config(
-                    "Base URL must start with http:// or https://".to_string(),
-                ));
-            }
+        if !self.base_url.is_empty()
+            && !self.base_url.starts_with("http://")
+            && !self.base_url.starts_with("https://")
+        {
+            return Err(ClientError::Config(
+                "Base URL must start with http:// or https://".to_string(),
+            ));
         }
         if self.timeout_secs == 0 {
             return Err(ClientError::Config(

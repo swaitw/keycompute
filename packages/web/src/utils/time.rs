@@ -25,6 +25,7 @@ pub fn format_time(iso: &str) -> String {
 }
 
 /// 同 `format_time`，但接受 `Option<&str>`，None 时返回 "—"。
+#[allow(dead_code)]
 pub fn format_time_opt(iso: Option<&str>) -> String {
     match iso {
         Some(s) if !s.is_empty() => format_time(s),

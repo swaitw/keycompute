@@ -1,3 +1,5 @@
+#![allow(clippy::clone_on_copy)]
+
 use dioxus::prelude::*;
 
 use crate::services::api_client::with_auto_refresh;
@@ -17,7 +19,7 @@ pub fn UserProfile() -> Element {
     let mut save_error = use_signal(|| Option::<String>::None);
 
     // 如果 UserStore 没有数据，主动获取
-    let user_data = use_resource(move || {
+    let _user_data = use_resource(move || {
         let auth = auth_store.clone();
         async move {
             // 先检查是否已有数据

@@ -32,10 +32,7 @@ pub fn Settings() -> Element {
 
     let get_val = move |key: &str| -> String {
         match settings() {
-            Some(Ok(ref m)) => m
-                .get(key)
-                .map(|v| v.to_string_value())
-                .unwrap_or_default(),
+            Some(Ok(ref m)) => m.get(key).map(|v| v.to_string_value()).unwrap_or_default(),
             _ => String::new(),
         }
     };

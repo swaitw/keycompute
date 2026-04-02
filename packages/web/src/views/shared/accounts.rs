@@ -23,10 +23,13 @@ const PROVIDERS: &[(&str, &str)] = &[
 fn default_models_for(provider: &str) -> Vec<String> {
     match provider {
         "openai" => vec!["gpt-4o".into(), "gpt-4o-mini".into(), "gpt-4-turbo".into()],
-        "claude" => vec!["claude-3-5-sonnet-latest".into(), "claude-3-opus-latest".into()],
+        "claude" => vec![
+            "claude-3-5-sonnet-latest".into(),
+            "claude-3-opus-latest".into(),
+        ],
         "deepseek" => vec!["deepseek-chat".into(), "deepseek-coder".into()],
         "gemini" => vec!["gemini-1.5-pro".into(), "gemini-1.5-flash".into()],
-        "vllm" => vec![], // 用户需自行配置
+        "vllm" => vec![],   // 用户需自行配置
         "ollama" => vec![], // 用户需自行配置
         _ => vec![],
     }
@@ -131,8 +134,8 @@ fn AdminAccountsView() -> Element {
         *error_msg.write() = String::new();
         spawn(async move {
             use client_api::api::admin::CreateAccountRequest;
-            let mut req = CreateAccountRequest::new(name, provider, api_key_val)
-                .with_models(models);
+            let mut req =
+                CreateAccountRequest::new(name, provider, api_key_val).with_models(models);
             if !api_base.is_empty() {
                 req = req.with_api_base(api_base);
             }

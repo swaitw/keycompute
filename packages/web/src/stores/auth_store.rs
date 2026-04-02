@@ -57,6 +57,7 @@ impl AuthStore {
         (self.state)().access_token.clone()
     }
 
+    #[allow(dead_code)]
     pub fn refresh_token(&self) -> Option<String> {
         (self.state)().refresh_token.clone()
     }

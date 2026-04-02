@@ -18,22 +18,24 @@ async fn test_get_my_usage_success() {
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
             {
                 "id": "usage_001",
-                "user_id": fixtures::TEST_USER_ID,
+                "request_id": fixtures::TEST_USER_ID,
                 "model": "gpt-4",
-                "prompt_tokens": 100,
-                "completion_tokens": 50,
+                "input_tokens": 100,
+                "output_tokens": 50,
                 "total_tokens": 150,
                 "cost": 0.0045,
+                "status": "success",
                 "created_at": "2024-01-15T10:00:00Z"
             },
             {
                 "id": "usage_002",
-                "user_id": fixtures::TEST_USER_ID,
+                "request_id": fixtures::TEST_USER_ID,
                 "model": "gpt-3.5-turbo",
-                "prompt_tokens": 200,
-                "completion_tokens": 100,
+                "input_tokens": 200,
+                "output_tokens": 100,
                 "total_tokens": 300,
                 "cost": 0.0004,
+                "status": "success",
                 "created_at": "2024-01-15T09:00:00Z"
             }
         ])))
@@ -85,12 +87,13 @@ async fn test_get_my_usage_with_date_range() {
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
             {
                 "id": "usage_003",
-                "user_id": fixtures::TEST_USER_ID,
+                "request_id": fixtures::TEST_USER_ID,
                 "model": "gpt-4",
-                "prompt_tokens": 50,
-                "completion_tokens": 25,
+                "input_tokens": 50,
+                "output_tokens": 25,
                 "total_tokens": 75,
                 "cost": 0.00225,
+                "status": "success",
                 "created_at": "2024-01-20T10:00:00Z"
             }
         ])))

@@ -4,7 +4,7 @@ use ui::{Badge, BadgeVariant, Pagination, Table, TableHead};
 use crate::router::Route;
 use crate::services::{api_client::with_auto_refresh, billing_service, payment_service};
 use crate::stores::auth_store::AuthStore;
-use crate::utils::time::{format_time, format_time_opt};
+use crate::utils::time::format_time;
 
 const PAGE_SIZE: usize = 20;
 

@@ -18,9 +18,10 @@ pub fn Dashboard() -> Element {
     let usage_stats = use_resource(move || {
         let auth = auth_store.clone();
         async move {
-            with_auto_refresh(auth, |token| async move {
-                usage_service::stats(&token).await
-            })
+            with_auto_refresh(
+                auth,
+                |token| async move { usage_service::stats(&token).await },
+            )
             .await
             .ok()
         }
@@ -41,7 +42,10 @@ pub fn Dashboard() -> Element {
     // 获取统计数据
     let stats = usage_stats.read();
     let (total_requests, total_cost) = if let Some(Some(ref s)) = *stats {
-        (s.total_requests.to_string(), format!("¥{:.2}", s.total_cost))
+        (
+            s.total_requests.to_string(),
+            format!("¥{:.2}", s.total_cost),
+        )
     } else {
         ("-".to_string(), "-".to_string())
     };

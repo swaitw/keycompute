@@ -5,10 +5,10 @@
 **下一代高性能 AI Token 算力服务平台**
 
 <p align="center">
-  <a href="#-功能特性">功能特性</a> •
-  <a href="#-快速开始">快速开始</a> •
-  <a href="#-部署">部署</a> •
-  <a href="#-文档">文档</a>
+  <a href="#功能特性">功能特性</a> •
+  <a href="#快速开始">快速开始</a> •
+  <a href="#配置说明">配置说明</a> •
+  <a href="#项目结构">项目结构</a>
 </p>
 
 </div>
@@ -267,14 +267,16 @@ curl https://your-domain/v1/models \
 
 ```bash
 # 编译
-cargo build --workspace
+cargo build --workspace --exclude desktop --exclude mobile --verbose
 
 # 运行测试
-cargo test --workspace
+cargo test --lib --workspace --exclude desktop --exclude mobile --verbose
+cargo test --package client-api --tests --verbose
+cargo test --package integration-tests --tests --verbose
 
 # 代码检查
-cargo clippy --workspace
-cargo fmt --check
+cargo clippy --workspace --exclude desktop --exclude mobile --all-targets --all-features --future-incompat-report -- -D warnings
+cargo fmt --all --check
 
 # 启用 Redis 后端
 cargo build -p keycompute-server --features redis
@@ -294,6 +296,6 @@ cargo build -p keycompute-server --features redis
 
 如果这个项目对你有帮助，欢迎给我们一个 ⭐️ Star！
 
-**[快速开始](#-快速开始)** • **[问题反馈](https://github.com/aiqubits/keycompute/issues)** • **[最新发布](https://github.com/aiqubits/keycompute/releases)**
+**[快速开始](#快速开始)** • **[问题反馈](https://github.com/aiqubits/keycompute/issues)** • **[最新发布](https://github.com/aiqubits/keycompute/releases)**
 
 </div>
