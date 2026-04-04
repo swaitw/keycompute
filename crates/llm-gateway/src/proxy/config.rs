@@ -91,7 +91,7 @@ mod tests {
     #[test]
     fn test_default_config() {
         let config = ProxyConfig::default();
-        assert_eq!(config.connect_timeout, Duration::from_secs(10));
+        assert_eq!(config.connect_timeout, Duration::from_secs(30));
         assert_eq!(config.request_timeout, Duration::from_secs(120));
         assert_eq!(config.stream_timeout, Duration::from_secs(600));
         assert!(config.enable_tracing);
