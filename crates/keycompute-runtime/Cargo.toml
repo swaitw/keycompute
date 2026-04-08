@@ -9,7 +9,8 @@ aes-gcm = "0.10"
 base64 = "0.22"
 dashmap = "6"
 rand = "0.8"
-redis = { version = "0.26", features = ["tokio-comp", "connection-manager"], optional = true }
+redis = { version = "0.27", features = ["tokio-comp", "connection-manager"], optional = true }
+deadpool-redis = { version = "0.18", optional = true }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 thiserror = "2"
@@ -19,4 +20,4 @@ uuid = { version = "1", features = ["v4", "serde"] }
 
 [features]
 default = []
-redis = ["dep:redis"]
+redis = ["dep:redis", "dep:deadpool-redis"]

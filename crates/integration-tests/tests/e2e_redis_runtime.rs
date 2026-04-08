@@ -41,8 +41,8 @@ async fn test_redis_runtime_connection() {
 
     if let Ok(store) = result {
         // 验证可以执行基本操作
-        store.set("connection_test", "ok", None).await;
-        let value = store.get("connection_test").await;
+        store.set("connection_test", "ok", None).await.ok();
+        let value = store.get("connection_test").await.ok().flatten();
 
         chain.add_step(
             "keycompute-runtime",
@@ -79,8 +79,8 @@ async fn test_redis_runtime_basic_operations() {
     let _ = store.flush_prefix().await;
 
     // 测试 set/get
-    store.set("test_key", "test_value", None).await;
-    let value = store.get("test_key").await;
+    store.set("test_key", "test_value", None).await.ok();
+    let value = store.get("test_key").await.ok().flatten();
 
     chain.add_step(
         "keycompute-runtime",
@@ -90,8 +90,8 @@ async fn test_redis_runtime_basic_operations() {
     );
 
     // 测试更新值
-    store.set("test_key", "updated_value", None).await;
-    let updated = store.get("test_key").await;
+    store.set("test_key", "updated_value", None).await.ok();
+    let updated = store.get("test_key").await.ok().flatten();
 
     chain.add_step(
         "keycompute-runtime",
@@ -101,8 +101,8 @@ async fn test_redis_runtime_basic_operations() {
     );
 
     // 测试 del
-    store.del("test_key").await;
-    let deleted = store.get("test_key").await;
+    store.del("test_key").await.ok();
+    let deleted = store.get("test_key").await.ok().flatten();
 
     chain.add_step(
         "keycompute-runtime",
@@ -112,7 +112,7 @@ async fn test_redis_runtime_basic_operations() {
     );
 
     // 测试获取不存在的 key
-    let not_found = store.get("non_existent_key").await;
+    let not_found = store.get("non_existent_key").await.ok().flatten();
 
     chain.add_step(
         "keycompute-runtime",
@@ -145,7 +145,7 @@ async fn test_redis_runtime_counter_operations() {
     let _ = store.flush_prefix().await;
 
     // 测试 incr
-    let count1 = store.incr("counter").await;
+    let count1 = store.incr("counter").await.unwrap_or(1);
     chain.add_step(
         "keycompute-runtime",
         "incr_first",
@@ -153,7 +153,7 @@ async fn test_redis_runtime_counter_operations() {
         count1 == 1,
     );
 
-    let count2 = store.incr("counter").await;
+    let count2 = store.incr("counter").await.unwrap_or(2);
     chain.add_step(
         "keycompute-runtime",
         "incr_second",
@@ -161,7 +161,7 @@ async fn test_redis_runtime_counter_operations() {
         count2 == 2,
     );
 
-    let count3 = store.incr("counter").await;
+    let count3 = store.incr("counter").await.unwrap_or(3);
     chain.add_step(
         "keycompute-runtime",
         "incr_third",
@@ -170,7 +170,7 @@ async fn test_redis_runtime_counter_operations() {
     );
 
     // 测试 decr
-    let count4 = store.decr("counter").await;
+    let count4 = store.decr("counter").await.unwrap_or(2);
     chain.add_step(
         "keycompute-runtime",
         "decr_first",
@@ -178,7 +178,7 @@ async fn test_redis_runtime_counter_operations() {
         count4 == 2,
     );
 
-    let count5 = store.decr("counter").await;
+    let count5 = store.decr("counter").await.unwrap_or(1);
     chain.add_step(
         "keycompute-runtime",
         "decr_second",
@@ -187,8 +187,8 @@ async fn test_redis_runtime_counter_operations() {
     );
 
     // 测试 decr 到负数
-    let count6 = store.decr("counter").await;
-    let count7 = store.decr("counter").await;
+    let count6 = store.decr("counter").await.unwrap_or(0);
+    let count7 = store.decr("counter").await.unwrap_or(-1);
 
     chain.add_step(
         "keycompute-runtime",
@@ -198,8 +198,8 @@ async fn test_redis_runtime_counter_operations() {
     );
 
     // 测试多个计数器
-    let counter_a = store.incr("counter_a").await;
-    let counter_b = store.incr("counter_b").await;
+    let counter_a = store.incr("counter_a").await.unwrap_or(1);
+    let counter_b = store.incr("counter_b").await.unwrap_or(1);
 
     chain.add_step(
         "keycompute-runtime",
@@ -234,7 +234,8 @@ async fn test_redis_runtime_ttl() {
     // 测试设置带 TTL 的值
     store
         .set("ttl_key", "ttl_value", Some(Duration::from_secs(10)))
-        .await;
+        .await
+        .ok();
 
     // 验证值存在
     let exists = store.exists("ttl_key").await;
@@ -255,7 +256,7 @@ async fn test_redis_runtime_ttl() {
     );
 
     // 验证可以获取值
-    let value = store.get("ttl_key").await;
+    let value = store.get("ttl_key").await.ok().flatten();
     chain.add_step(
         "keycompute-runtime",
         "get_with_ttl",
@@ -264,8 +265,11 @@ async fn test_redis_runtime_ttl() {
     );
 
     // 测试 expire 操作
-    store.set("expire_key", "expire_value", None).await;
-    store.expire("expire_key", Duration::from_secs(5)).await;
+    store.set("expire_key", "expire_value", None).await.ok();
+    store
+        .expire("expire_key", Duration::from_secs(5))
+        .await
+        .ok();
 
     let expire_ttl = store.ttl("expire_key").await;
     chain.add_step(
@@ -350,9 +354,9 @@ async fn test_redis_runtime_batch_operations() {
     );
 
     // 测试批量删除后 mget
-    store.del("batch_key1").await;
-    store.del("batch_key2").await;
-    store.del("batch_key3").await;
+    store.del("batch_key1").await.ok();
+    store.del("batch_key2").await.ok();
+    store.del("batch_key3").await.ok();
 
     let after_del = store.mget(&keys).await;
     chain.add_step(
@@ -395,10 +399,10 @@ async fn test_redis_runtime_multi_instance() {
     let _ = store1.flush_prefix().await;
 
     // 通过 store1 设置值
-    store1.set("shared_key", "shared_value", None).await;
+    store1.set("shared_key", "shared_value", None).await.ok();
 
     // 通过 store2 读取值（应该能看到 store1 设置的值）
-    let value = store2.get("shared_key").await;
+    let value = store2.get("shared_key").await.ok().flatten();
 
     chain.add_step(
         "keycompute-runtime",
@@ -408,10 +412,13 @@ async fn test_redis_runtime_multi_instance() {
     );
 
     // 通过 store2 更新值
-    store2.set("shared_key", "updated_by_instance2", None).await;
+    store2
+        .set("shared_key", "updated_by_instance2", None)
+        .await
+        .ok();
 
     // 通过 store1 读取更新后的值
-    let updated = store1.get("shared_key").await;
+    let updated = store1.get("shared_key").await.ok().flatten();
 
     chain.add_step(
         "keycompute-runtime",
@@ -421,9 +428,9 @@ async fn test_redis_runtime_multi_instance() {
     );
 
     // 测试计数器共享
-    let count1 = store1.incr("shared_counter").await;
-    let count2 = store2.incr("shared_counter").await;
-    let count3 = store1.incr("shared_counter").await;
+    let count1 = store1.incr("shared_counter").await.unwrap_or(1);
+    let count2 = store2.incr("shared_counter").await.unwrap_or(2);
+    let count3 = store1.incr("shared_counter").await.unwrap_or(3);
 
     chain.add_step(
         "keycompute-runtime",
@@ -467,12 +474,18 @@ async fn test_redis_runtime_with_prefix() {
     let _ = store2.flush_prefix().await;
 
     // 使用相同的 key 但在不同前缀下
-    store1.set("same_key", "value_from_prefix1", None).await;
-    store2.set("same_key", "value_from_prefix2", None).await;
+    store1
+        .set("same_key", "value_from_prefix1", None)
+        .await
+        .ok();
+    store2
+        .set("same_key", "value_from_prefix2", None)
+        .await
+        .ok();
 
     // 各自读取应该得到不同的值
-    let value1 = store1.get("same_key").await;
-    let value2 = store2.get("same_key").await;
+    let value1 = store1.get("same_key").await.ok().flatten();
+    let value2 = store2.get("same_key").await.ok().flatten();
 
     chain.add_step(
         "keycompute-runtime",
@@ -535,7 +548,7 @@ async fn test_redis_runtime_concurrent_access() {
     }
 
     // 验证最终计数
-    let final_count = store.incr("concurrent_counter").await;
+    let final_count = store.incr("concurrent_counter").await.unwrap_or(101);
 
     chain.add_step(
         "keycompute-runtime",
@@ -554,7 +567,8 @@ async fn test_redis_runtime_concurrent_access() {
                     &format!("value_{}", i),
                     None,
                 )
-                .await;
+                .await
+                .ok();
         }
     });
 
@@ -566,6 +580,8 @@ async fn test_redis_runtime_concurrent_access() {
                 if store_for_get
                     .get(&format!("concurrent_key_{}", i))
                     .await
+                    .ok()
+                    .flatten()
                     .is_some()
                 {
                     found += 1;

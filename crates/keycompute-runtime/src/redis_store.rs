@@ -4,18 +4,36 @@
 //! - 分布式状态共享
 //! - 自动过期清理
 //! - 高可用性
+//! - 连接池管理
 
-use crate::store::RuntimeStore;
-use redis::{AsyncCommands, Client};
+use crate::store::{RuntimeStore, StoreError, StoreResult};
+use deadpool_redis::redis::AsyncCommands;
+use deadpool_redis::{Config, Pool, Runtime};
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Arc;
 use std::time::Duration;
+
+/// Redis 存储错误
+#[derive(Debug, thiserror::Error)]
+pub enum RedisStoreError {
+    /// 连接池错误
+    #[error("Redis pool error: {0}")]
+    PoolError(#[from] deadpool_redis::PoolError),
+    /// Redis 错误
+    #[error("Redis error: {0}")]
+    RedisError(#[from] deadpool_redis::redis::RedisError),
+    /// 连接错误
+    #[error("Connection failed: {0}")]
+    ConnectionFailed(String),
+    /// 创建连接池错误
+    #[error("Failed to create pool: {0}")]
+    CreatePoolError(String),
+}
 
 /// Redis 运行时存储
 #[derive(Debug, Clone)]
 pub struct RedisRuntimeStore {
-    client: Arc<Client>,
+    pool: Pool,
     key_prefix: String,
     default_ttl: Duration,
 }
@@ -25,11 +43,14 @@ impl RedisRuntimeStore {
     ///
     /// # 参数
     /// - `redis_url`: Redis 连接 URL
-    pub fn new(redis_url: &str) -> Result<Self, redis::RedisError> {
-        let client = Client::open(redis_url)?;
+    pub fn new(redis_url: &str) -> Result<Self, RedisStoreError> {
+        let cfg = Config::from_url(redis_url);
+        let pool = cfg
+            .create_pool(Some(Runtime::Tokio1))
+            .map_err(|e| RedisStoreError::CreatePoolError(e.to_string()))?;
 
         Ok(Self {
-            client: Arc::new(client),
+            pool,
             key_prefix: "keycompute:runtime".to_string(),
             default_ttl: Duration::from_secs(300),
         })
@@ -39,13 +60,34 @@ impl RedisRuntimeStore {
     pub fn with_prefix(
         redis_url: &str,
         prefix: impl Into<String>,
-    ) -> Result<Self, redis::RedisError> {
-        let client = Client::open(redis_url)?;
+    ) -> Result<Self, RedisStoreError> {
+        let cfg = Config::from_url(redis_url);
+        let pool = cfg
+            .create_pool(Some(Runtime::Tokio1))
+            .map_err(|e| RedisStoreError::CreatePoolError(e.to_string()))?;
 
         Ok(Self {
-            client: Arc::new(client),
+            pool,
             key_prefix: prefix.into(),
             default_ttl: Duration::from_secs(300),
+        })
+    }
+
+    /// 从配置创建存储
+    pub fn from_config(config: &RedisPoolConfig) -> Result<Self, RedisStoreError> {
+        let mut cfg = Config::from_url(&config.url);
+        cfg.pool = Some(deadpool_redis::PoolConfig {
+            max_size: config.pool_size,
+            ..Default::default()
+        });
+        let pool = cfg
+            .create_pool(Some(Runtime::Tokio1))
+            .map_err(|e| RedisStoreError::CreatePoolError(e.to_string()))?;
+
+        Ok(Self {
+            pool,
+            key_prefix: config.key_prefix.clone(),
+            default_ttl: config.default_ttl,
         })
     }
 
@@ -61,23 +103,42 @@ impl RedisRuntimeStore {
     }
 
     /// 获取 Redis 连接
-    async fn get_conn(&self) -> Result<redis::aio::MultiplexedConnection, redis::RedisError> {
-        self.client.get_multiplexed_tokio_connection().await
+    async fn get_conn(&self) -> Result<deadpool_redis::Connection, RedisStoreError> {
+        self.pool.get().await.map_err(Into::into)
+    }
+
+    /// 健康检查
+    pub async fn health_check(&self) -> Result<(), RedisStoreError> {
+        let mut conn = self.get_conn().await?;
+        let _: () = deadpool_redis::redis::cmd("PING")
+            .query_async(&mut conn)
+            .await?;
+        Ok(())
+    }
+
+    /// 获取连接池状态
+    pub fn pool_status(&self) -> deadpool_redis::Status {
+        self.pool.status()
     }
 }
 
 impl RuntimeStore for RedisRuntimeStore {
-    fn get(&self, key: &str) -> Pin<Box<dyn Future<Output = Option<String>> + Send + '_>> {
+    fn get(
+        &self,
+        key: &str,
+    ) -> Pin<Box<dyn Future<Output = StoreResult<Option<String>>> + Send + '_>> {
         let key = self.build_key(key);
-        let client = Arc::clone(&self.client);
+        let pool = self.pool.clone();
 
         Box::pin(async move {
-            let mut conn = match client.get_multiplexed_tokio_connection().await {
-                Ok(conn) => conn,
-                Err(_) => return None,
-            };
+            let mut conn = pool
+                .get()
+                .await
+                .map_err(|e| StoreError::ConnectionFailed(e.to_string()))?;
 
-            conn.get(&key).await.ok()
+            conn.get(&key)
+                .await
+                .map_err(|e| StoreError::OperationFailed(e.to_string()))
         })
     }
 
@@ -86,62 +147,97 @@ impl RuntimeStore for RedisRuntimeStore {
         key: &str,
         value: &str,
         ttl: Option<Duration>,
-    ) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+    ) -> Pin<Box<dyn Future<Output = StoreResult<()>> + Send + '_>> {
         let key = self.build_key(key);
         let value = value.to_string();
         let ttl = ttl.unwrap_or(self.default_ttl);
-        let client = Arc::clone(&self.client);
+        let pool = self.pool.clone();
 
         Box::pin(async move {
-            if let Ok(mut conn) = client.get_multiplexed_tokio_connection().await {
-                let _: Result<(), _> = conn.set_ex(&key, value, ttl.as_secs()).await;
-            }
+            let mut conn = pool
+                .get()
+                .await
+                .map_err(|e| StoreError::ConnectionFailed(e.to_string()))?;
+
+            conn.set_ex(&key, value, ttl.as_secs())
+                .await
+                .map_err(|e| StoreError::OperationFailed(e.to_string()))
         })
     }
 
-    fn del(&self, key: &str) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+    fn del(&self, key: &str) -> Pin<Box<dyn Future<Output = StoreResult<()>> + Send + '_>> {
         let key = self.build_key(key);
-        let client = Arc::clone(&self.client);
+        let pool = self.pool.clone();
 
         Box::pin(async move {
-            if let Ok(mut conn) = client.get_multiplexed_tokio_connection().await {
-                let _: Result<(), _> = conn.del(&key).await;
-            }
+            let mut conn = pool
+                .get()
+                .await
+                .map_err(|e| StoreError::ConnectionFailed(e.to_string()))?;
+
+            conn.del(&key)
+                .await
+                .map_err(|e| StoreError::OperationFailed(e.to_string()))
         })
     }
 
-    fn incr(&self, key: &str) -> Pin<Box<dyn Future<Output = i64> + Send + '_>> {
+    fn incr(&self, key: &str) -> Pin<Box<dyn Future<Output = StoreResult<i64>> + Send + '_>> {
         let key = self.build_key(key);
-        let client = Arc::clone(&self.client);
+        let pool = self.pool.clone();
 
         Box::pin(async move {
-            match client.get_multiplexed_tokio_connection().await {
-                Ok(mut conn) => conn.incr(&key, 1i64).await.unwrap_or(1),
-                Err(_) => 1,
-            }
+            let mut conn = pool
+                .get()
+                .await
+                .map_err(|e| StoreError::ConnectionFailed(e.to_string()))?;
+
+            conn.incr(&key, 1i64)
+                .await
+                .map_err(|e| StoreError::OperationFailed(e.to_string()))
         })
     }
 
-    fn decr(&self, key: &str) -> Pin<Box<dyn Future<Output = i64> + Send + '_>> {
+    fn decr(&self, key: &str) -> Pin<Box<dyn Future<Output = StoreResult<i64>> + Send + '_>> {
         let key = self.build_key(key);
-        let client = Arc::clone(&self.client);
+        let pool = self.pool.clone();
 
         Box::pin(async move {
-            match client.get_multiplexed_tokio_connection().await {
-                Ok(mut conn) => conn.decr(&key, 1i64).await.unwrap_or(-1),
-                Err(_) => -1,
-            }
+            let mut conn = pool
+                .get()
+                .await
+                .map_err(|e| StoreError::ConnectionFailed(e.to_string()))?;
+
+            conn.decr(&key, 1i64)
+                .await
+                .map_err(|e| StoreError::OperationFailed(e.to_string()))
         })
     }
 
-    fn expire(&self, key: &str, ttl: Duration) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+    fn expire(
+        &self,
+        key: &str,
+        ttl: Duration,
+    ) -> Pin<Box<dyn Future<Output = StoreResult<()>> + Send + '_>> {
         let key = self.build_key(key);
-        let client = Arc::clone(&self.client);
+        let pool = self.pool.clone();
 
         Box::pin(async move {
-            if let Ok(mut conn) = client.get_multiplexed_tokio_connection().await {
-                let _: Result<(), _> = conn.expire(&key, ttl.as_secs() as i64).await;
+            let mut conn = pool
+                .get()
+                .await
+                .map_err(|e| StoreError::ConnectionFailed(e.to_string()))?;
+
+            let result: i64 = conn
+                .expire(&key, ttl.as_secs() as i64)
+                .await
+                .map_err(|e| StoreError::OperationFailed(e.to_string()))?;
+
+            // Redis expire 返回 1 表示成功设置，0 表示键不存在
+            if result == 0 {
+                return Err(StoreError::KeyNotFound(key));
             }
+
+            Ok(())
         })
     }
 }
@@ -152,12 +248,11 @@ impl RedisRuntimeStore {
         let full_keys: Vec<String> = keys.iter().map(|k| self.build_key(k)).collect();
 
         match self.get_conn().await {
-            Ok(mut conn) => {
-                let results: Vec<Option<String>> =
-                    conn.mget(&full_keys).await.unwrap_or_else(|_| vec![]);
-                results
+            Ok(mut conn) => conn.mget(&full_keys).await.unwrap_or_else(|_| vec![]),
+            Err(e) => {
+                tracing::warn!("Failed to get Redis connection: {}", e);
+                vec![None; keys.len()]
             }
-            Err(_) => vec![None; keys.len()],
         }
     }
 
@@ -165,10 +260,20 @@ impl RedisRuntimeStore {
     pub async fn mset(&self, kvs: &[(&str, &str)], ttl: Option<Duration>) {
         let ttl = ttl.unwrap_or(self.default_ttl);
 
-        if let Ok(mut conn) = self.get_conn().await {
-            for (key, value) in kvs {
-                let full_key = self.build_key(key);
-                let _: Result<(), _> = conn.set_ex(&full_key, *value, ttl.as_secs()).await;
+        match self.get_conn().await {
+            Ok(mut conn) => {
+                for (key, value) in kvs {
+                    let full_key = self.build_key(key);
+                    if let Err(e) = conn
+                        .set_ex::<&str, &str, ()>(&full_key, *value, ttl.as_secs())
+                        .await
+                    {
+                        tracing::warn!("Redis mset error: {}", e);
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::warn!("Failed to get Redis connection: {}", e);
             }
         }
     }
@@ -177,7 +282,10 @@ impl RedisRuntimeStore {
     pub async fn exists(&self, key: &str) -> bool {
         match self.get_conn().await {
             Ok(mut conn) => conn.exists(self.build_key(key)).await.unwrap_or(false),
-            Err(_) => false,
+            Err(e) => {
+                tracing::warn!("Failed to get Redis connection: {}", e);
+                false
+            }
         }
     }
 
@@ -185,19 +293,25 @@ impl RedisRuntimeStore {
     pub async fn ttl(&self, key: &str) -> i64 {
         match self.get_conn().await {
             Ok(mut conn) => conn.ttl(self.build_key(key)).await.unwrap_or(-2),
-            Err(_) => -2,
+            Err(e) => {
+                tracing::warn!("Failed to get Redis connection: {}", e);
+                -2
+            }
         }
     }
 
     /// 清理所有以当前前缀开头的键
-    pub async fn flush_prefix(&self) -> Result<(), redis::RedisError> {
+    pub async fn flush_prefix(&self) -> Result<(), RedisStoreError> {
         let pattern = format!("{}:*", self.key_prefix);
 
         // 收集所有匹配的 key
         let mut keys = Vec::new();
         {
             let mut conn = self.get_conn().await?;
-            let mut iter: redis::AsyncIter<String> = conn.scan_match(&pattern).await?;
+            let mut iter: deadpool_redis::redis::AsyncIter<String> = conn
+                .scan_match(&pattern)
+                .await
+                .map_err(RedisStoreError::RedisError)?;
             while let Some(key) = iter.next_item().await {
                 keys.push(key);
             }
@@ -206,15 +320,10 @@ impl RedisRuntimeStore {
         // 批量删除 key
         if !keys.is_empty() {
             let mut conn = self.get_conn().await?;
-            let _: () = conn.del(&keys).await?;
+            let _: () = conn.del(&keys).await.map_err(RedisStoreError::RedisError)?;
         }
 
         Ok(())
-    }
-
-    /// 获取 Redis 客户端
-    pub fn client(&self) -> &Arc<Client> {
-        &self.client
     }
 
     /// 获取 Key 前缀
@@ -280,13 +389,13 @@ mod tests {
         let _ = store.flush_prefix().await;
 
         // 测试 set/get
-        store.set("test_key", "test_value", None).await;
-        let value = store.get("test_key").await;
+        store.set("test_key", "test_value", None).await.unwrap();
+        let value = store.get("test_key").await.unwrap();
         assert_eq!(value, Some("test_value".to_string()));
 
         // 测试 del
-        store.del("test_key").await;
-        let value = store.get("test_key").await;
+        store.del("test_key").await.unwrap();
+        let value = store.get("test_key").await.unwrap();
         assert_eq!(value, None);
     }
 
@@ -299,14 +408,14 @@ mod tests {
         let _ = store.flush_prefix().await;
 
         // 测试 incr
-        let count1 = store.incr("counter").await;
+        let count1 = store.incr("counter").await.unwrap();
         assert_eq!(count1, 1);
 
-        let count2 = store.incr("counter").await;
+        let count2 = store.incr("counter").await.unwrap();
         assert_eq!(count2, 2);
 
         // 测试 decr
-        let count3 = store.decr("counter").await;
+        let count3 = store.decr("counter").await.unwrap();
         assert_eq!(count3, 1);
     }
 
@@ -321,7 +430,8 @@ mod tests {
         // 设置带 TTL 的值
         store
             .set("ttl_key", "ttl_value", Some(Duration::from_secs(10)))
-            .await;
+            .await
+            .unwrap();
 
         // 检查存在
         assert!(store.exists("ttl_key").await);
