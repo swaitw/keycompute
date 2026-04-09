@@ -117,6 +117,26 @@ impl UserBalance {
         Ok(balance)
     }
 
+    /// 批量根据用户ID查找余额
+    ///
+    /// 返回 HashMap<user_id, UserBalance>，用于避免 N+1 查询
+    pub async fn find_by_users(
+        pool: &sqlx::PgPool,
+        user_ids: &[Uuid],
+    ) -> Result<std::collections::HashMap<Uuid, UserBalance>, DbError> {
+        if user_ids.is_empty() {
+            return Ok(std::collections::HashMap::new());
+        }
+
+        let balances =
+            sqlx::query_as::<_, UserBalance>("SELECT * FROM user_balances WHERE user_id = ANY($1)")
+                .bind(user_ids)
+                .fetch_all(pool)
+                .await?;
+
+        Ok(balances.into_iter().map(|b| (b.user_id, b)).collect())
+    }
+
     /// 充值（事务内执行）
     ///
     /// # 注意
@@ -311,6 +331,75 @@ impl UserBalance {
             None,
             TransactionType::Freeze,
             -amount,
+            balance_before,
+            balance_after,
+            description,
+        )
+        .await?;
+
+        Ok((updated_balance, transaction))
+    }
+
+    /// 解冻余额
+    ///
+    /// 将冻结余额转回可用余额
+    ///
+    /// # Errors
+    /// - `DbError::NotFound` - 用户余额记录不存在
+    /// - `DbError::InsufficientBalance` - 冻结余额不足
+    pub async fn unfreeze(
+        pool: &mut sqlx::PgConnection,
+        user_id: Uuid,
+        amount: Decimal,
+        description: Option<&str>,
+    ) -> Result<(UserBalance, BalanceTransaction), DbError> {
+        let balance = sqlx::query_as::<_, UserBalance>(
+            "SELECT * FROM user_balances WHERE user_id = $1 FOR UPDATE",
+        )
+        .bind(user_id)
+        .fetch_optional(&mut *pool)
+        .await?;
+
+        // 检查余额是否存在
+        let balance = match balance {
+            Some(b) => b,
+            None => return Err(DbError::not_found("UserBalance", user_id.to_string())),
+        };
+
+        // 检查冻结余额是否足够
+        if balance.frozen_balance < amount {
+            return Err(DbError::insufficient_balance(
+                amount.to_string(),
+                balance.frozen_balance.to_string(),
+            ));
+        }
+
+        let balance_before = balance.available_balance;
+        let balance_after = balance_before + amount;
+
+        let updated_balance = sqlx::query_as::<_, UserBalance>(
+            r#"
+            UPDATE user_balances
+            SET available_balance = available_balance + $1,
+                frozen_balance = frozen_balance - $1,
+                updated_at = NOW()
+            WHERE user_id = $2
+            RETURNING *
+            ""#,
+        )
+        .bind(amount)
+        .bind(user_id)
+        .fetch_one(&mut *pool)
+        .await?;
+
+        let transaction = BalanceTransaction::create_internal(
+            &mut *pool,
+            balance.tenant_id,
+            user_id,
+            None,
+            None,
+            TransactionType::Unfreeze,
+            amount,
             balance_before,
             balance_after,
             description,

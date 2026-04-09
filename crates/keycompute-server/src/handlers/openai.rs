@@ -299,6 +299,15 @@ pub async fn chat_completions(
     request_id: RequestId,
     Json(request): Json<ChatCompletionRequest>,
 ) -> Result<axum::response::Response> {
+    // 0. 余额预检查
+    // 如果余额低于阈值（0.1元），直接拒绝请求
+    if let Some(balance_service) = state.billing.balance_service() {
+        balance_service
+            .check_balance_for_tenant(auth.user_id, auth.tenant_id)
+            .await
+            .map_err(ApiError::from)?;
+    }
+
     // 1. 构建 PricingSnapshot
     let pricing = state
         .pricing

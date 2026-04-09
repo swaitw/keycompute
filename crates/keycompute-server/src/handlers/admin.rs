@@ -23,7 +23,6 @@ use keycompute_db::models::pricing_model::{
 };
 use keycompute_db::models::tenant::Tenant;
 use keycompute_db::models::user::User;
-use keycompute_db::models::user_balance::UserBalance;
 use keycompute_provider_trait::{DefaultHttpTransport, HttpTransport};
 use rust_decimal::Decimal;
 use rust_decimal::prelude::ToPrimitive;
@@ -129,60 +128,72 @@ pub async fn list_all_users(
     let tenant_map: std::collections::HashMap<Uuid, String> =
         tenants.into_iter().map(|t| (t.id, t.name)).collect();
 
-    // 构建用户信息列表
-    let mut result = Vec::new();
-    for user in users {
-        // 应用过滤条件
-        if let Some(filter_tenant_id) = params.tenant_id
-            && user.tenant_id != filter_tenant_id
-        {
-            continue;
-        }
-        if let Some(ref filter_role) = params.role
-            && &user.role != filter_role
-        {
-            continue;
-        }
-        if let Some(ref search) = params.search {
-            let search_lower = search.to_lowercase();
-            let email_match = user.email.to_lowercase().contains(&search_lower);
-            let name_match = user
-                .name
-                .as_ref()
-                .map(|n| n.to_lowercase().contains(&search_lower))
-                .unwrap_or(false);
-            if !email_match && !name_match {
-                continue;
+    // 第一遍：应用过滤条件，收集过滤后的用户
+    let filtered_users: Vec<_> = users
+        .into_iter()
+        .filter(|user| {
+            // 应用租户过滤
+            if let Some(filter_tenant_id) = params.tenant_id
+                && user.tenant_id != filter_tenant_id
+            {
+                return false;
             }
-        }
+            // 应用角色过滤
+            if let Some(ref filter_role) = params.role
+                && &user.role != filter_role
+            {
+                return false;
+            }
+            // 应用搜索过滤
+            if let Some(ref search) = params.search {
+                let search_lower = search.to_lowercase();
+                let email_match = user.email.to_lowercase().contains(&search_lower);
+                let name_match = user
+                    .name
+                    .as_ref()
+                    .map(|n| n.to_lowercase().contains(&search_lower))
+                    .unwrap_or(false);
+                if !email_match && !name_match {
+                    return false;
+                }
+            }
+            true
+        })
+        .collect();
 
-        // 获取用户余额
-        let balance = UserBalance::find_by_user(pool, user.id)
-            .await
-            .ok()
-            .flatten();
+    // 批量预加载余额（避免 N+1 查询）
+    let user_ids: Vec<Uuid> = filtered_users.iter().map(|u| u.id).collect();
+    let balance_map = if let Some(bs) = state.billing.balance_service() {
+        bs.find_by_users(&user_ids).await.ok().unwrap_or_default()
+    } else {
+        std::collections::HashMap::new()
+    };
 
-        // 从缓存获取租户名称
-        let tenant_name = tenant_map
-            .get(&user.tenant_id)
-            .cloned()
-            .unwrap_or_else(|| "Unknown".to_string());
+    // 第二遍：构建用户信息列表
+    let result: Vec<AdminUserInfo> = filtered_users
+        .into_iter()
+        .map(|user| {
+            let balance = balance_map.get(&user.id);
+            let tenant_name = tenant_map
+                .get(&user.tenant_id)
+                .cloned()
+                .unwrap_or_else(|| "Unknown".to_string());
 
-        result.push(AdminUserInfo {
-            id: user.id,
-            email: user.email.clone(),
-            name: user.name.clone(),
-            role: user.role.clone(),
-            tenant_id: user.tenant_id,
-            tenant_name,
-            balance: balance
-                .as_ref()
-                .map(|b| b.available_balance.to_f64().unwrap_or(0.0))
-                .unwrap_or(0.0),
-            created_at: user.created_at.to_rfc3339(),
-            last_login_at: None,
-        });
-    }
+            AdminUserInfo {
+                id: user.id,
+                email: user.email.clone(),
+                name: user.name.clone(),
+                role: user.role.clone(),
+                tenant_id: user.tenant_id,
+                tenant_name,
+                balance: balance
+                    .map(|b| b.available_balance.to_f64().unwrap_or(0.0))
+                    .unwrap_or(0.0),
+                created_at: user.created_at.to_rfc3339(),
+                last_login_at: None,
+            }
+        })
+        .collect();
 
     // 计算总页数
     let total_pages = (total + params.page_size - 1) / params.page_size;
@@ -227,10 +238,11 @@ pub async fn get_user_by_id(
         .unwrap_or_else(|| "Unknown".to_string());
 
     // 获取用户余额
-    let balance = UserBalance::find_by_user(pool, user.id)
-        .await
-        .ok()
-        .flatten();
+    let balance = if let Some(bs) = state.billing.balance_service() {
+        bs.find_by_user(user.id).await.ok().flatten()
+    } else {
+        None
+    };
 
     Ok(Json(AdminUserInfo {
         id: user.id,
@@ -357,10 +369,10 @@ pub async fn update_user_balance(
         return Err(ApiError::Auth("Admin permission required".to_string()));
     }
 
-    let pool = state
-        .pool
-        .as_ref()
-        .ok_or_else(|| ApiError::Internal("Database not configured".to_string()))?;
+    let balance_service = state
+        .billing
+        .balance_service()
+        .ok_or_else(|| ApiError::Internal("Balance service not configured".to_string()))?;
 
     // 解析金额
     let amount: Decimal = req
@@ -372,45 +384,27 @@ pub async fn update_user_balance(
         return Err(ApiError::BadRequest("Amount cannot be zero".to_string()));
     }
 
-    // 获取或创建用户余额
-    let balance = UserBalance::get_or_create(pool, auth.tenant_id, user_id)
-        .await
-        .map_err(|e| ApiError::Internal(format!("Failed to get user balance: {}", e)))?;
-
-    let balance_before = balance.available_balance;
-    let balance_after = balance_before + amount;
-
-    if balance_after < Decimal::ZERO {
-        return Err(ApiError::BadRequest(
-            "Insufficient balance for this operation".to_string(),
-        ));
-    }
-
-    // 使用事务更新余额
-    let mut tx = pool
-        .begin()
-        .await
-        .map_err(|e| ApiError::Internal(format!("Failed to begin transaction: {}", e)))?;
-
+    // 更新余额
+    // 注意：余额检查由 BalanceService 内部通过 FOR UPDATE 锁保证原子性
+    // 不在此处预检查，避免 TOCTOU 竞争条件
     let (updated_balance, _transaction) = if amount > Decimal::ZERO {
-        UserBalance::recharge(
-            &mut tx,
-            user_id,
-            auth.tenant_id,
-            amount,
-            None,
-            Some(&req.reason),
-        )
-        .await
+        balance_service
+            .recharge(user_id, auth.tenant_id, amount, None, Some(&req.reason))
+            .await
+            .map_err(ApiError::from)?
     } else {
         // 负数金额视为消费
-        UserBalance::consume(&mut tx, user_id, -amount, None, Some(&req.reason)).await
-    }
-    .map_err(|e| ApiError::Internal(format!("Failed to update balance: {}", e)))?;
+        balance_service
+            .consume(user_id, -amount, None, Some(&req.reason))
+            .await
+            .map_err(ApiError::from)?
+    };
 
-    tx.commit()
-        .await
-        .map_err(|e| ApiError::Internal(format!("Failed to commit transaction: {}", e)))?;
+    // 计算操作前的余额
+    // balance_before = new_balance - amount 对两种情况都成立
+    // 充值: balance_before = new_balance - positive_amount
+    // 消费: balance_before = new_balance - negative_amount = new_balance + |amount|
+    let balance_before = updated_balance.available_balance - amount;
 
     Ok(Json(serde_json::json!({
         "success": true,

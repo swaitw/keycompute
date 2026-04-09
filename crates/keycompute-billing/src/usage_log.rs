@@ -2,10 +2,11 @@
 //!
 //! 构建并写入 usage_logs 主账本
 
+use crate::balance::BalanceService;
 use crate::calculator::calculate_amount;
 use crate::usage_source::UsageSource;
 use chrono::{DateTime, Utc};
-use keycompute_db::{CreateUsageLogRequest, UsageLog, UserBalance};
+use keycompute_db::{CreateUsageLogRequest, UsageLog};
 use keycompute_distribution::{
     DistributionContext, DistributionService, calculator::calculate_shares,
 };
@@ -22,6 +23,8 @@ pub struct BillingService {
     pool: Option<Arc<PgPool>>,
     /// 分销服务（可选）
     distribution: Option<DistributionService>,
+    /// 余额服务（可选）
+    balance: Option<BalanceService>,
 }
 
 impl std::fmt::Debug for BillingService {
@@ -32,6 +35,7 @@ impl std::fmt::Debug for BillingService {
                 "distribution",
                 &self.distribution.as_ref().map(|_| "DistributionService"),
             )
+            .field("balance", &self.balance.as_ref().map(|_| "BalanceService"))
             .finish()
     }
 }
@@ -42,6 +46,7 @@ impl BillingService {
         Self {
             pool: None,
             distribution: None,
+            balance: None,
         }
     }
 
@@ -50,6 +55,7 @@ impl BillingService {
         Self {
             pool: Some(Arc::clone(&pool)),
             distribution: Some(DistributionService::with_pool(Arc::clone(&pool))),
+            balance: Some(BalanceService::new(pool)),
         }
     }
 
@@ -59,9 +65,17 @@ impl BillingService {
         distribution: DistributionService,
     ) -> Self {
         Self {
-            pool: Some(pool),
+            pool: Some(Arc::clone(&pool)),
             distribution: Some(distribution),
+            balance: Some(BalanceService::new(pool)),
         }
+    }
+
+    /// 获取余额服务
+    ///
+    /// 用于需要直接操作余额的场景
+    pub fn balance_service(&self) -> Option<&BalanceService> {
+        self.balance.as_ref()
     }
 
     /// 流结束后执行结算
@@ -225,216 +239,187 @@ impl BillingService {
 
         let user_amount = bigdecimal_to_decimal(&usage_log.user_amount);
 
-        // 扣除用户余额
-        if let Some(pool) = &self.pool {
-            match self
-                .deduct_user_balance(pool, user_id, user_amount, usage_log.id, &ctx.model)
-                .await
-            {
-                Ok(_) => {
-                    tracing::info!(
-                        request_id = %ctx.request_id,
-                        user_id = %user_id,
-                        amount = %user_amount,
-                        "User balance deducted successfully"
-                    );
-                }
-                Err(e) => {
-                    // 根据架构约束，Billing 不反向影响执行结果
-                    // 扣除失败时仅记录错误，不抛出异常
-                    tracing::error!(
-                        request_id = %ctx.request_id,
-                        user_id = %user_id,
-                        amount = %user_amount,
-                        error = %e,
-                        "Failed to deduct user balance (recorded as debt)"
-                    );
-                }
-            }
-        } else {
-            tracing::debug!(
-                request_id = %ctx.request_id,
-                "No database pool configured, skipping balance deduction"
-            );
-        }
+        // 扣除用户余额（失败不影响主流程）
+        self.deduct_balance_if_configured(
+            ctx.request_id,
+            user_id,
+            user_amount,
+            usage_log.id,
+            &ctx.model,
+        )
+        .await;
 
-        // 触发分销处理
-        if let (Some(distribution), Some(pool)) = (&self.distribution, &self.pool) {
-            // 创建分销上下文
-            let dist_ctx = DistributionContext::new(
-                usage_log.id,
-                ctx.tenant_id,
-                user_amount,
-                &usage_log.currency,
-            );
-
-            // 查询用户的推荐关系
-            let (level1_beneficiary, level2_beneficiary) =
-                match keycompute_db::UserReferral::find_by_user(pool, user_id).await {
-                    Ok(Some(referral)) => {
-                        (referral.level1_referrer_id, referral.level2_referrer_id)
-                    }
-                    Ok(None) => (None, None),
-                    Err(e) => {
-                        tracing::warn!(
-                            user_id = %user_id,
-                            error = %e,
-                            "Failed to find user referral, proceeding without distribution"
-                        );
-                        (None, None)
-                    }
-                };
-
-            // 如果没有推荐关系，跳过分销
-            if level1_beneficiary.is_none() {
-                tracing::debug!(
-                    user_id = %user_id,
-                    "No referral relationship found, skipping distribution"
-                );
-                return Ok(usage_log);
-            }
-
-            // 查询租户的分销规则
-            let rules =
-                match keycompute_db::TenantDistributionRule::find_by_tenant(pool, ctx.tenant_id)
-                    .await
-                {
-                    Ok(rules) => rules,
-                    Err(e) => {
-                        tracing::warn!(
-                            tenant_id = %ctx.tenant_id,
-                            error = %e,
-                            "Failed to find distribution rules, using default ratios"
-                        );
-                        vec![]
-                    }
-                };
-
-            // 确定分成比例（优先使用规则表，否则使用默认值）
-            let default_level1_ratio = Decimal::from(3) / Decimal::from(100); // 3%
-            let default_level2_ratio = Decimal::from(2) / Decimal::from(100); // 2%
-
-            let level1_ratio = rules
-                .iter()
-                .find(|r| r.beneficiary_id == level1_beneficiary.unwrap_or_else(Uuid::nil))
-                .map(|r| bigdecimal_to_decimal(&r.commission_rate))
-                .unwrap_or(default_level1_ratio);
-
-            let level2_ratio = level2_beneficiary
-                .and_then(|l2_id| {
-                    rules
-                        .iter()
-                        .find(|r| r.beneficiary_id == l2_id)
-                        .map(|r| bigdecimal_to_decimal(&r.commission_rate))
-                })
-                .unwrap_or(default_level2_ratio);
-
-            // 计算分成
-            let shares = calculate_shares(
-                user_amount,
-                level1_ratio,
-                level2_ratio,
-                level1_beneficiary.unwrap_or_else(Uuid::nil),
-                level2_beneficiary,
-            );
-
-            // 处理并保存分销记录
-            match distribution.process_and_save(&dist_ctx, &shares).await {
-                Ok(records) => {
-                    tracing::info!(
-                        request_id = %ctx.request_id,
-                        usage_log_id = %usage_log.id,
-                        distribution_records = records.len(),
-                        level1_ratio = %level1_ratio,
-                        level2_ratio = %level2_ratio,
-                        "Distribution processed successfully"
-                    );
-                }
-                Err(e) => {
-                    // 分销失败不影响主计费流程，只记录错误
-                    tracing::error!(
-                        request_id = %ctx.request_id,
-                        usage_log_id = %usage_log.id,
-                        error = %e,
-                        "Distribution processing failed"
-                    );
-                }
-            }
-        } else {
-            tracing::debug!(
-                request_id = %ctx.request_id,
-                "No distribution service configured, skipping distribution"
-            );
-        }
+        // 触发分销处理（失败不影响主流程）
+        self.process_distribution_if_configured(ctx, &usage_log, user_id, user_amount)
+            .await;
 
         Ok(usage_log)
     }
 
-    /// 扣除用户余额
+    /// 扣除用户余额（如果已配置余额服务）
     ///
-    /// 在事务中执行余额扣除，如果余额不足则记录错误
-    async fn deduct_user_balance(
+    /// 架构约束：失败不影响主流程，仅记录错误
+    async fn deduct_balance_if_configured(
         &self,
-        pool: &Arc<PgPool>,
+        request_id: Uuid,
         user_id: Uuid,
-        amount: Decimal,
+        user_amount: Decimal,
         usage_log_id: Uuid,
         model_name: &str,
-    ) -> Result<()> {
-        // 开启事务
-        let mut tx = pool.begin().await.map_err(|e| {
-            KeyComputeError::DatabaseError(format!("Failed to begin transaction: {}", e))
-        })?;
+    ) {
+        let Some(balance) = &self.balance else {
+            tracing::debug!(
+                request_id = %request_id,
+                "No balance service configured, skipping balance deduction"
+            );
+            return;
+        };
 
-        // 执行余额扣除
-        let result = UserBalance::consume(
-            &mut tx,
-            user_id,
-            amount,
-            Some(usage_log_id),
-            Some(&format!("API调用: {}", model_name)),
-        )
-        .await;
-
-        match result {
+        match balance
+            .consume(
+                user_id,
+                user_amount,
+                Some(usage_log_id),
+                Some(&format!("API调用: {}", model_name)),
+            )
+            .await
+        {
             Ok((updated_balance, _transaction)) => {
-                // 提交事务
-                tx.commit().await.map_err(|e| {
-                    KeyComputeError::DatabaseError(format!("Failed to commit transaction: {}", e))
-                })?;
-
-                tracing::debug!(
+                tracing::info!(
+                    request_id = %request_id,
                     user_id = %user_id,
-                    amount = %amount,
+                    amount = %user_amount,
                     new_balance = %updated_balance.available_balance,
-                    "Balance deducted successfully"
+                    "User balance deducted successfully"
                 );
-
-                Ok(())
-            }
-            Err(e) if e.is_insufficient_balance() => {
-                // 余额不足，回滚事务
-                tx.rollback().await.ok();
-                Err(KeyComputeError::ValidationError(format!(
-                    "Insufficient balance for user {}: required {}",
-                    user_id, amount
-                )))
-            }
-            Err(e) if e.is_not_found() => {
-                // 余额记录不存在，回滚事务
-                tx.rollback().await.ok();
-                Err(KeyComputeError::ValidationError(format!(
-                    "User balance not found for user {}",
-                    user_id
-                )))
             }
             Err(e) => {
-                // 其他错误，回滚事务
-                tx.rollback().await.ok();
-                Err(KeyComputeError::DatabaseError(format!(
-                    "Failed to deduct balance: {}",
-                    e
-                )))
+                // 根据架构约束，Billing 不反向影响执行结果
+                // 扣除失败时仅记录错误，不抛出异常
+                tracing::error!(
+                    request_id = %request_id,
+                    user_id = %user_id,
+                    amount = %user_amount,
+                    error = %e,
+                    "Failed to deduct user balance (recorded as debt)"
+                );
+            }
+        }
+    }
+
+    /// 处理分销（如果已配置分销服务）
+    ///
+    /// 架构约束：分销失败不影响主流程，仅记录错误
+    async fn process_distribution_if_configured(
+        &self,
+        ctx: &RequestContext,
+        usage_log: &UsageLog,
+        user_id: Uuid,
+        user_amount: Decimal,
+    ) {
+        let (Some(distribution), Some(pool)) = (&self.distribution, &self.pool) else {
+            tracing::debug!(
+                request_id = %ctx.request_id,
+                "No distribution service configured, skipping distribution"
+            );
+            return;
+        };
+
+        // 创建分销上下文
+        let dist_ctx = DistributionContext::new(
+            usage_log.id,
+            ctx.tenant_id,
+            user_amount,
+            &usage_log.currency,
+        );
+
+        // 查询用户的推荐关系
+        let (level1_beneficiary, level2_beneficiary) =
+            match keycompute_db::UserReferral::find_by_user(pool, user_id).await {
+                Ok(Some(referral)) => (referral.level1_referrer_id, referral.level2_referrer_id),
+                Ok(None) => (None, None),
+                Err(e) => {
+                    tracing::warn!(
+                        user_id = %user_id,
+                        error = %e,
+                        "Failed to find user referral, proceeding without distribution"
+                    );
+                    (None, None)
+                }
+            };
+
+        // 如果没有推荐关系，跳过分销
+        let Some(l1_id) = level1_beneficiary else {
+            tracing::debug!(
+                user_id = %user_id,
+                "No referral relationship found, skipping distribution"
+            );
+            return;
+        };
+
+        // 查询租户的分销规则
+        let rules = match keycompute_db::TenantDistributionRule::find_by_tenant(pool, ctx.tenant_id)
+            .await
+        {
+            Ok(rules) => rules,
+            Err(e) => {
+                tracing::warn!(
+                    tenant_id = %ctx.tenant_id,
+                    error = %e,
+                    "Failed to find distribution rules, using default ratios"
+                );
+                vec![]
+            }
+        };
+
+        // 确定分成比例（优先使用规则表，否则使用默认值）
+        let default_level1_ratio = Decimal::from(3) / Decimal::from(100); // 3%
+        let default_level2_ratio = Decimal::from(2) / Decimal::from(100); // 2%
+
+        let level1_ratio = rules
+            .iter()
+            .find(|r| r.beneficiary_id == l1_id)
+            .map(|r| bigdecimal_to_decimal(&r.commission_rate))
+            .unwrap_or(default_level1_ratio);
+
+        let level2_ratio = level2_beneficiary
+            .and_then(|l2_id| {
+                rules
+                    .iter()
+                    .find(|r| r.beneficiary_id == l2_id)
+                    .map(|r| bigdecimal_to_decimal(&r.commission_rate))
+            })
+            .unwrap_or(default_level2_ratio);
+
+        // 计算分成
+        let shares = calculate_shares(
+            user_amount,
+            level1_ratio,
+            level2_ratio,
+            l1_id,
+            level2_beneficiary,
+        );
+
+        // 处理并保存分销记录
+        match distribution.process_and_save(&dist_ctx, &shares).await {
+            Ok(records) => {
+                tracing::info!(
+                    request_id = %ctx.request_id,
+                    usage_log_id = %usage_log.id,
+                    distribution_records = records.len(),
+                    level1_ratio = %level1_ratio,
+                    level2_ratio = %level2_ratio,
+                    "Distribution processed successfully"
+                );
+            }
+            Err(e) => {
+                // 分销失败不影响主计费流程，只记录错误
+                tracing::error!(
+                    request_id = %ctx.request_id,
+                    usage_log_id = %usage_log.id,
+                    error = %e,
+                    "Distribution processing failed"
+                );
             }
         }
     }
@@ -674,16 +659,41 @@ impl NewUsageLogBuilder {
 }
 
 /// 将 Decimal 转换为 BigDecimal
+///
+/// # Panics
+/// 如果转换失败会记录警告并返回 0（理论上不应该发生）
 fn decimal_to_bigdecimal(value: &Decimal) -> bigdecimal::BigDecimal {
-    // Decimal -> String -> BigDecimal
     let s = value.to_string();
-    s.parse().unwrap_or(bigdecimal::BigDecimal::from(0))
+    match s.parse() {
+        Ok(bd) => bd,
+        Err(e) => {
+            tracing::warn!(
+                value = %s,
+                error = %e,
+                "Failed to convert Decimal to BigDecimal, returning 0"
+            );
+            bigdecimal::BigDecimal::from(0)
+        }
+    }
 }
 
 /// 将 BigDecimal 转换为 Decimal
+///
+/// # Panics
+/// 如果转换失败会记录警告并返回 0（理论上不应该发生）
 fn bigdecimal_to_decimal(value: &bigdecimal::BigDecimal) -> Decimal {
     let s = value.to_string();
-    s.parse().unwrap_or(Decimal::from(0))
+    match s.parse() {
+        Ok(d) => d,
+        Err(e) => {
+            tracing::warn!(
+                value = %s,
+                error = %e,
+                "Failed to convert BigDecimal to Decimal, returning 0"
+            );
+            Decimal::from(0)
+        }
+    }
 }
 
 #[cfg(test)]

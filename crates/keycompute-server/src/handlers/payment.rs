@@ -356,12 +356,13 @@ pub async fn get_my_balance(
     auth: AuthExtractor,
     State(state): State<AppState>,
 ) -> Result<Json<UserBalanceResponse>> {
-    let pool = state
-        .pool
-        .as_ref()
-        .ok_or(ApiError::Internal("数据库未配置".to_string()))?;
+    let balance_service = state
+        .billing
+        .balance_service()
+        .ok_or(ApiError::Internal("余额服务未配置".to_string()))?;
 
-    let balance = keycompute_db::UserBalance::get_or_create(pool, auth.tenant_id, auth.user_id)
+    let balance = balance_service
+        .get_or_create(auth.tenant_id, auth.user_id)
         .await
         .map_err(|e| ApiError::Internal(format!("获取余额失败: {}", e)))?;
 

@@ -3,10 +3,12 @@
 //! 计费模块，仅在 stream 结束后执行。
 //! 架构约束：不参与路由，不预扣余额，不反向影响执行结果。
 
+pub mod balance;
 pub mod calculator;
 pub mod usage_log;
 pub mod usage_source;
 
+pub use balance::{BalanceService, min_balance_threshold};
 pub use calculator::calculate_amount;
 pub use usage_log::{BillingService, NewUsageLog};
 pub use usage_source::UsageSource;
@@ -29,6 +31,9 @@ impl BillingTrigger {
     ///
     /// 输入: usage + pricing_snapshot + request metadata
     /// 输出: 同步写入不可变 usage_logs 主账本
+    ///
+    /// # 错误
+    /// - 如果计费结算失败，返回错误而不 panic
     pub async fn trigger(
         &self,
         ctx: &RequestContext,
@@ -36,11 +41,10 @@ impl BillingTrigger {
         account_id: uuid::Uuid,
         status: &str,
         billing: &BillingService,
-    ) -> crate::usage_log::NewUsageLog {
+    ) -> keycompute_types::Result<crate::usage_log::NewUsageLog> {
         billing
             .finalize(ctx, provider_name, account_id, status)
             .await
-            .unwrap()
     }
 }
 
