@@ -19,6 +19,7 @@ pub mod redis;
 pub mod server;
 
 pub use auth::AuthConfig;
+pub use auth::DEFAULT_JWT_SECRET;
 pub use crypto::CryptoConfig;
 pub use database::DatabaseConfig;
 pub use distribution::DistributionConfig;
@@ -57,6 +58,8 @@ pub enum ConfigLoadError {
     FileNotFound(String),
     #[error("环境变量格式错误: {0}")]
     EnvFormatError(String),
+    #[error("配置验证失败: {0}")]
+    ValidationError(String),
 }
 
 impl AppConfig {
@@ -76,10 +79,7 @@ impl AppConfig {
         let mut builder = Self::create_default_builder()?;
 
         // 2. 从配置文件加载（如果存在）
-        let config_paths = [
-            "config.toml",
-            "/opt/rust/project/keycompute/key_compute/config.toml",
-        ];
+        let config_paths = ["config.toml"];
 
         for path in &config_paths {
             if Path::new(path).exists() {
@@ -159,7 +159,7 @@ impl AppConfig {
             .set_default("database.idle_timeout_secs", 600)?
             .set_default("database.max_lifetime_secs", 1800)?
             // 认证默认值
-            .set_default("auth.jwt_secret", "change-me-in-production")?
+            .set_default("auth.jwt_secret", DEFAULT_JWT_SECRET)?
             .set_default("auth.jwt_issuer", "keycompute")?
             .set_default("auth.jwt_expiry_secs", 3600)?
             // Gateway 默认值
@@ -181,21 +181,235 @@ impl AppConfig {
     }
 
     /// 验证配置有效性
+    ///
+    /// 验证项包括：
+    /// - 服务器绑定地址有效性
+    /// - 服务器端口有效性
+    /// - 数据库连接 URL 有效性
+    /// - 数据库连接池配置合理性（max > 0, max >= min）
+    /// - 数据库超时配置有效性
+    /// - Email 配置有效性（SMTP 主机、端口、发件人地址）
+    /// - JWT 密钥安全性（生产环境禁止使用默认值）
+    /// - JWT 密钥长度警告
+    /// - JWT 过期时间有效性
+    /// - JWT 签发者有效性
+    /// - 分销配置业务约束
+    /// - 加密密钥配置提醒
+    /// - Redis 配置验证（如果已配置）
+    /// - Gateway 超时配置警告
+    /// - Gateway 重试策略验证
+    /// - Gateway 最大重试次数警告
     pub fn validate(&self) -> Result<(), ConfigLoadError> {
-        // 验证服务器端口
-        if self.server.port == 0 {
-            return Err(ConfigLoadError::EnvFormatError(
-                "服务器端口不能为 0".to_string(),
+        // 验证服务器配置
+        if self.server.bind_addr.is_empty() {
+            return Err(ConfigLoadError::ValidationError(
+                "服务器绑定地址不能为空".to_string(),
             ));
         }
 
+        // 验证服务器端口（有效范围 1-65535）
+        if self.server.port == 0 {
+            return Err(ConfigLoadError::ValidationError(
+                "服务器端口不能为 0".to_string(),
+            ));
+        }
+        // 注意：u16 类型自动保证端口 <= 65535，无需额外检查
+
         // 验证数据库 URL
         if self.database.url.is_empty() {
-            return Err(ConfigLoadError::EnvFormatError(
+            return Err(ConfigLoadError::ValidationError(
                 "数据库 URL 不能为空".to_string(),
             ));
         }
 
+        // 验证数据库连接池配置
+        if self.database.max_connections == 0 {
+            return Err(ConfigLoadError::ValidationError(
+                "数据库最大连接数不能为 0".to_string(),
+            ));
+        }
+
+        if self.database.max_connections < self.database.min_connections {
+            return Err(ConfigLoadError::ValidationError(
+                "数据库最大连接数不能小于最小连接数".to_string(),
+            ));
+        }
+
+        // 数据库超时配置检查
+        if self.database.connect_timeout_secs == 0 {
+            return Err(ConfigLoadError::ValidationError(
+                "数据库连接超时不能为 0".to_string(),
+            ));
+        }
+
+        if self.database.idle_timeout_secs == 0 {
+            tracing::warn!("⚠️  数据库空闲超时设置为 0，连接将永不过期");
+        }
+
+        if self.database.max_lifetime_secs == 0 {
+            tracing::warn!("⚠️  数据库连接最大生命周期设置为 0，连接将永不过期");
+        }
+
+        // JWT 密钥安全检查
+        if self.auth.jwt_secret == DEFAULT_JWT_SECRET {
+            tracing::warn!(
+                "⚠️  安全警告: JWT 密钥使用默认值，生产环境必须修改！请设置 KC__AUTH__JWT_SECRET 环境变量"
+            );
+            // 生产环境强制报错
+            #[cfg(not(debug_assertions))]
+            return Err(ConfigLoadError::ValidationError(
+                "生产环境禁止使用默认 JWT 密钥，请设置 KC__AUTH__JWT_SECRET 环境变量".to_string(),
+            ));
+        }
+
+        // JWT 密钥长度检查（排除默认密钥，避免重复警告）
+        if self.auth.jwt_secret != DEFAULT_JWT_SECRET && self.auth.jwt_secret.len() < 32 {
+            tracing::warn!("⚠️  安全警告: JWT 密钥长度不足 32 字符，建议使用更长的密钥");
+        }
+
+        // JWT 过期时间验证
+        if self.auth.jwt_expiry_secs == 0 {
+            return Err(ConfigLoadError::ValidationError(
+                "JWT 过期时间不能为 0".to_string(),
+            ));
+        }
+
+        if self.auth.jwt_expiry_secs > 86400 * 30 {
+            // 超过 30 天
+            tracing::warn!(
+                "⚠️  JWT 过期时间设置为 {} 秒（超过 30 天），请确认是否符合安全策略",
+                self.auth.jwt_expiry_secs
+            );
+        }
+
+        // JWT 签发者验证
+        if self.auth.jwt_issuer.is_empty() {
+            return Err(ConfigLoadError::ValidationError(
+                "JWT 签发者不能为空".to_string(),
+            ));
+        }
+
+        // 数据库连接检查
+        if self.database.url.contains("localhost") || self.database.url.contains("127.0.0.1") {
+            tracing::debug!("数据库连接到本地地址，请确认生产环境配置正确");
+        }
+
+        // 分销配置验证
+        if let Err(e) = self.distribution.validate() {
+            return Err(ConfigLoadError::ValidationError(e));
+        }
+
+        // Email 配置检查
+        if self.email.smtp_port == 0 {
+            return Err(ConfigLoadError::ValidationError(
+                "SMTP 端口不能为 0".to_string(),
+            ));
+        }
+
+        if self.email.smtp_host.is_empty() {
+            return Err(ConfigLoadError::ValidationError(
+                "SMTP 主机地址不能为空".to_string(),
+            ));
+        }
+
+        if self.email.from_address.is_empty() {
+            return Err(ConfigLoadError::ValidationError(
+                "Email 发件人地址不能为空".to_string(),
+            ));
+        }
+
+        // 简单的邮箱格式验证
+        if !self.email.from_address.contains('@') {
+            tracing::warn!(
+                "⚠️  Email 发件人地址 '{}' 格式可能不正确，缺少 @ 符号",
+                self.email.from_address
+            );
+        }
+
+        if self.email.timeout_secs == 0 {
+            tracing::warn!("⚠️  Email 发送超时设置为 0，将使用无超时模式");
+        }
+
+        if self.email.verification_base_url.is_empty() {
+            tracing::warn!("⚠️  验证链接基础 URL 为空，邮件验证功能将不可用");
+        }
+
+        // 加密配置提醒
+        let has_crypto_key = self.crypto.as_ref().map(|c| c.has_key()).unwrap_or(false);
+        if !has_crypto_key {
+            tracing::info!(
+                "💡 提示: 未配置加密密钥，Provider API Key 将明文存储。建议设置 KC__CRYPTO__SECRET_KEY"
+            );
+        }
+
+        // Redis 配置检查
+        if let Some(ref redis_config) = self.redis {
+            // Redis 已配置，验证配置有效性
+            if redis_config.url.is_empty() {
+                return Err(ConfigLoadError::ValidationError(
+                    "Redis URL 不能为空".to_string(),
+                ));
+            }
+            if let Some(pool_size) = redis_config.pool_size
+                && pool_size == 0
+            {
+                tracing::warn!("⚠️  Redis 连接池大小设置为 0，将使用默认值");
+            }
+        } else {
+            tracing::info!("💡 提示: 未配置 Redis，分布式限流功能将不可用");
+        }
+
+        // Gateway 超时配置检查
+        // 注意：timeout_secs=0 在 reqwest 中会立即超时（Duration::ZERO），
+        // 导致所有请求失败，这几乎肯定是配置错误
+        if self.gateway.timeout_secs == 0 {
+            tracing::warn!("⚠️  Gateway 超时时间设置为 0，请求会立即超时失败！请检查配置");
+        }
+
+        // 检查 HTTP 请求超时
+        if self.gateway.request_timeout_secs == 0 {
+            tracing::warn!("⚠️  Gateway HTTP 请求超时设置为 0，非流式请求会立即失败！");
+        }
+
+        // 检查流式请求超时
+        if self.gateway.stream_timeout_secs == 0 {
+            tracing::warn!("⚠️  Gateway 流式请求超时设置为 0，流式请求会立即失败！");
+        }
+
+        if self.gateway.max_retries == 0 {
+            tracing::warn!("⚠️  Gateway 最大重试次数设置为 0，请求失败时将不会重试");
+        }
+
+        if self.gateway.max_retries > 10 {
+            tracing::warn!(
+                "⚠️  Gateway 最大重试次数设置为 {}，可能导致请求延迟过高",
+                self.gateway.max_retries
+            );
+        }
+
+        // 重试策略验证
+        // 先检查无效值（<= 0），再检查警告值（< 1.0）
+        if self.gateway.retry.backoff_multiplier <= 0.0 {
+            return Err(ConfigLoadError::ValidationError(format!(
+                "Gateway 重试退避倍数必须大于 0，当前值为 {}",
+                self.gateway.retry.backoff_multiplier
+            )));
+        }
+
+        if self.gateway.retry.backoff_multiplier < 1.0 {
+            tracing::warn!(
+                "⚠️  Gateway 重试退避倍数 {} 小于 1.0，退避时间会递减！",
+                self.gateway.retry.backoff_multiplier
+            );
+        }
+
+        if self.gateway.retry.initial_backoff_ms > self.gateway.retry.max_backoff_ms {
+            return Err(ConfigLoadError::ValidationError(
+                "Gateway 重试初始退避时间不能大于最大退避时间".to_string(),
+            ));
+        }
+
+        tracing::info!("配置验证通过");
         Ok(())
     }
 }
@@ -269,6 +483,312 @@ mod tests {
             std::env::remove_var("KC__EMAIL__SMTP_PASSWORD");
             std::env::remove_var("KC__EMAIL__FROM_ADDRESS");
             std::env::remove_var("KC__EMAIL__VERIFICATION_BASE_URL");
+        }
+    }
+
+    #[test]
+    fn test_validate_port_zero() {
+        let mut config = AppConfig::default();
+        config.server.port = 0;
+        let result = config.validate();
+        assert!(result.is_err());
+        match result {
+            Err(ConfigLoadError::ValidationError(msg)) => {
+                assert!(msg.contains("端口"));
+            }
+            _ => panic!("期望 ValidationError"),
+        }
+    }
+
+    #[test]
+    fn test_validate_empty_database_url() {
+        let mut config = AppConfig::default();
+        config.database.url = "".to_string();
+        let result = config.validate();
+        assert!(result.is_err());
+        match result {
+            Err(ConfigLoadError::ValidationError(msg)) => {
+                assert!(msg.contains("数据库 URL"));
+            }
+            _ => panic!("期望 ValidationError"),
+        }
+    }
+
+    #[test]
+    fn test_validate_database_pool_config() {
+        let mut config = AppConfig::default();
+        config.database.max_connections = 1;
+        config.database.min_connections = 5;
+        let result = config.validate();
+        assert!(result.is_err());
+        match result {
+            Err(ConfigLoadError::ValidationError(msg)) => {
+                assert!(msg.contains("最大连接数"));
+            }
+            _ => panic!("期望 ValidationError"),
+        }
+    }
+
+    #[test]
+    fn test_validate_database_connect_timeout_zero() {
+        // 数据库连接超时为 0 应该报错
+        let mut config = AppConfig::default();
+        config.database.connect_timeout_secs = 0;
+        let result = config.validate();
+        assert!(result.is_err());
+        match result {
+            Err(ConfigLoadError::ValidationError(msg)) => {
+                assert!(msg.contains("连接超时"));
+            }
+            _ => panic!("期望 ValidationError"),
+        }
+    }
+
+    #[test]
+    fn test_validate_gateway_timeout_zero() {
+        // 超时时间为 0 会立即超时，但现在只警告不报错
+        let mut config = AppConfig::default();
+        config.auth.jwt_secret = "a-very-secure-jwt-secret-key-for-testing".to_string();
+        config.gateway.timeout_secs = 0;
+        let result = config.validate();
+        // 应该通过验证，但会有警告日志
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_jwt_short_key() {
+        // 短 JWT 密钥应该触发警告（但不报错）
+        let mut config = AppConfig::default();
+        config.auth.jwt_secret = "short-key".to_string(); // 9 字符，< 32
+        let result = config.validate();
+        // 应该通过验证，但会有警告日志
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_distribution_config() {
+        let config = AppConfig {
+            distribution: DistributionConfig {
+                default_level1_ratio: 0.5,
+                default_level2_ratio: 0.5,
+                max_total_ratio: 0.3,
+            },
+            ..Default::default()
+        };
+        let result = config.validate();
+        assert!(result.is_err());
+        match result {
+            Err(ConfigLoadError::ValidationError(msg)) => {
+                assert!(msg.contains("分销比例"));
+            }
+            _ => panic!("期望 ValidationError"),
+        }
+    }
+
+    #[test]
+    fn test_validate_valid_config() {
+        let mut config = AppConfig::default();
+        // 设置非默认的 JWT 密钥避免警告
+        config.auth.jwt_secret = "a-very-secure-jwt-secret-key-for-testing".to_string();
+        let result = config.validate();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_gateway_retry_backoff_invalid() {
+        // 重试初始退避时间大于最大退避时间应该报错
+        let mut config = AppConfig::default();
+        config.auth.jwt_secret = "a-very-secure-jwt-secret-key-for-testing".to_string();
+        config.gateway.retry.initial_backoff_ms = 5000;
+        config.gateway.retry.max_backoff_ms = 1000;
+        let result = config.validate();
+        assert!(result.is_err());
+        match result {
+            Err(ConfigLoadError::ValidationError(msg)) => {
+                assert!(msg.contains("初始退避时间"));
+            }
+            _ => panic!("期望 ValidationError"),
+        }
+    }
+
+    #[test]
+    fn test_validate_gateway_backoff_multiplier_zero() {
+        // 重试退避倍数为 0 应该报错
+        let mut config = AppConfig::default();
+        config.auth.jwt_secret = "a-very-secure-jwt-secret-key-for-testing".to_string();
+        config.gateway.retry.backoff_multiplier = 0.0;
+        let result = config.validate();
+        assert!(result.is_err());
+        match result {
+            Err(ConfigLoadError::ValidationError(msg)) => {
+                assert!(msg.contains("退避倍数") && msg.contains("大于 0"));
+            }
+            _ => panic!("期望 ValidationError"),
+        }
+    }
+
+    #[test]
+    fn test_validate_gateway_backoff_multiplier_negative() {
+        // 重试退避倍数为负数应该报错
+        let mut config = AppConfig::default();
+        config.auth.jwt_secret = "a-very-secure-jwt-secret-key-for-testing".to_string();
+        config.gateway.retry.backoff_multiplier = -1.0;
+        let result = config.validate();
+        assert!(result.is_err());
+        match result {
+            Err(ConfigLoadError::ValidationError(msg)) => {
+                assert!(msg.contains("退避倍数") && msg.contains("大于 0"));
+            }
+            _ => panic!("期望 ValidationError"),
+        }
+    }
+
+    #[test]
+    fn test_validate_database_max_connections_zero() {
+        // 数据库最大连接数为 0 应该报错
+        let mut config = AppConfig::default();
+        config.database.max_connections = 0;
+        let result = config.validate();
+        assert!(result.is_err());
+        match result {
+            Err(ConfigLoadError::ValidationError(msg)) => {
+                assert!(msg.contains("最大连接数"));
+            }
+            _ => panic!("期望 ValidationError"),
+        }
+    }
+
+    #[test]
+    fn test_validate_smtp_port_zero() {
+        // SMTP 端口为 0 应该报错
+        let mut config = AppConfig::default();
+        config.email.smtp_port = 0;
+        let result = config.validate();
+        assert!(result.is_err());
+        match result {
+            Err(ConfigLoadError::ValidationError(msg)) => {
+                assert!(msg.contains("SMTP 端口"));
+            }
+            _ => panic!("期望 ValidationError"),
+        }
+    }
+
+    #[test]
+    fn test_validate_redis_url_empty() {
+        // Redis URL 为空应该报错
+        let config = AppConfig {
+            redis: Some(RedisConfig {
+                url: "".to_string(),
+                key_prefix: None,
+                pool_size: Some(10),
+                connect_timeout_secs: Some(5),
+            }),
+            ..Default::default()
+        };
+        let result = config.validate();
+        assert!(result.is_err());
+        match result {
+            Err(ConfigLoadError::ValidationError(msg)) => {
+                assert!(msg.contains("Redis URL"));
+            }
+            _ => panic!("期望 ValidationError"),
+        }
+    }
+
+    #[test]
+    fn test_validate_jwt_expiry_zero() {
+        // JWT 过期时间为 0 应该报错
+        let mut config = AppConfig::default();
+        config.auth.jwt_expiry_secs = 0;
+        let result = config.validate();
+        assert!(result.is_err());
+        match result {
+            Err(ConfigLoadError::ValidationError(msg)) => {
+                assert!(msg.contains("JWT 过期时间"));
+            }
+            _ => panic!("期望 ValidationError"),
+        }
+    }
+
+    #[test]
+    fn test_validate_gateway_max_retries_zero() {
+        // 最大重试次数为 0 应该警告但不报错
+        let mut config = AppConfig::default();
+        config.auth.jwt_secret = "a-very-secure-jwt-secret-key-for-testing".to_string();
+        config.gateway.max_retries = 0;
+        let result = config.validate();
+        // 应该通过验证，但会有警告日志
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_bind_addr_empty() {
+        // 服务器绑定地址为空应该报错
+        let mut config = AppConfig::default();
+        config.server.bind_addr = "".to_string();
+        let result = config.validate();
+        assert!(result.is_err());
+        match result {
+            Err(ConfigLoadError::ValidationError(msg)) => {
+                assert!(msg.contains("绑定地址"));
+            }
+            _ => panic!("期望 ValidationError"),
+        }
+    }
+
+    #[test]
+    fn test_validate_email_from_address_empty() {
+        // Email 发件人地址为空应该报错
+        let mut config = AppConfig::default();
+        config.email.from_address = "".to_string();
+        let result = config.validate();
+        assert!(result.is_err());
+        match result {
+            Err(ConfigLoadError::ValidationError(msg)) => {
+                assert!(msg.contains("发件人地址"));
+            }
+            _ => panic!("期望 ValidationError"),
+        }
+    }
+
+    #[test]
+    fn test_validate_email_from_address_invalid() {
+        // Email 发件人地址缺少 @ 符号应该警告但不报错
+        let mut config = AppConfig::default();
+        config.auth.jwt_secret = "a-very-secure-jwt-secret-key-for-testing".to_string();
+        config.email.from_address = "invalid-email".to_string();
+        let result = config.validate();
+        // 应该通过验证，但会有警告日志
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_jwt_issuer_empty() {
+        // JWT 签发者为空应该报错
+        let mut config = AppConfig::default();
+        config.auth.jwt_issuer = "".to_string();
+        let result = config.validate();
+        assert!(result.is_err());
+        match result {
+            Err(ConfigLoadError::ValidationError(msg)) => {
+                assert!(msg.contains("签发者"));
+            }
+            _ => panic!("期望 ValidationError"),
+        }
+    }
+
+    #[test]
+    fn test_validate_smtp_host_empty() {
+        // SMTP 主机为空应该报错
+        let mut config = AppConfig::default();
+        config.email.smtp_host = "".to_string();
+        let result = config.validate();
+        assert!(result.is_err());
+        match result {
+            Err(ConfigLoadError::ValidationError(msg)) => {
+                assert!(msg.contains("SMTP 主机"));
+            }
+            _ => panic!("期望 ValidationError"),
         }
     }
 }

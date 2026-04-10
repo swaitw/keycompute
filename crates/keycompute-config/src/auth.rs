@@ -2,6 +2,9 @@
 
 use serde::Deserialize;
 
+/// JWT 默认密钥（生产环境必须修改）
+pub const DEFAULT_JWT_SECRET: &str = "change-me-in-production";
+
 /// 认证配置
 #[derive(Debug, Deserialize, Clone)]
 pub struct AuthConfig {
@@ -16,7 +19,7 @@ pub struct AuthConfig {
 impl Default for AuthConfig {
     fn default() -> Self {
         Self {
-            jwt_secret: "change-me-in-production".to_string(),
+            jwt_secret: DEFAULT_JWT_SECRET.to_string(),
             jwt_issuer: "keycompute".to_string(),
             jwt_expiry_secs: 3600,
         }
