@@ -4,14 +4,14 @@ use client_api::error::Result;
 use client_api::{
     PaymentApi,
     api::payment::{
-        BalanceResponse, CreatePaymentOrderRequest, PaymentOrderResponse, PaymentOrderSummary,
-        PaymentQueryParams,
+        CreatePaymentOrderRequest, PaymentOrderResponse, PaymentOrderSummary, PaymentQueryParams,
+        UserBalanceResponse,
     },
 };
 
 use super::api_client::get_client;
 
-pub async fn get_balance(token: &str) -> Result<BalanceResponse> {
+pub async fn get_balance(token: &str) -> Result<UserBalanceResponse> {
     let client = get_client();
     PaymentApi::new(&client).get_my_balance(token).await
 }

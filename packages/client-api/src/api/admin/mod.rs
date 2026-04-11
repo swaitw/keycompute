@@ -24,7 +24,7 @@ pub use pricing::{
     SetDefaultPricingRequest, UpdatePricingRequest,
 };
 pub use user::{
-    ApiKeyInfo, BalanceResponse, UpdateBalanceRequest, UpdateUserRequest, UserDetail,
+    ApiKeyInfo, UpdateBalanceRequest, UpdateBalanceResponse, UpdateUserRequest, UserDetail,
     UserListResponse, UserQueryParams,
 };
 
@@ -93,7 +93,7 @@ impl AdminApi {
         id: &str,
         req: &UpdateBalanceRequest,
         token: &str,
-    ) -> Result<BalanceResponse> {
+    ) -> Result<UpdateBalanceResponse> {
         self.client
             .post_json(&format!("/api/v1/users/{}/balance", id), req, Some(token))
             .await

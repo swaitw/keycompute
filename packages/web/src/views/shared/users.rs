@@ -53,7 +53,7 @@ fn AdminUsersView() -> Element {
     let mut users = use_resource(move || async move {
         with_auto_refresh(auth_store, |token| async move {
             let client = get_client();
-            let params = UserQueryParams::new().with_limit(200);
+            let params = UserQueryParams::new().with_page_size(200);
             AdminApi::new(&client)
                 .list_all_users(Some(&params), &token)
                 .await

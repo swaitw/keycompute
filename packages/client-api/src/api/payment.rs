@@ -78,7 +78,7 @@ impl PaymentApi {
     }
 
     /// 获取我的余额
-    pub async fn get_my_balance(&self, token: &str) -> Result<BalanceResponse> {
+    pub async fn get_my_balance(&self, token: &str) -> Result<UserBalanceResponse> {
         self.client
             .get_json("/api/v1/payments/balance", Some(token))
             .await
@@ -184,9 +184,9 @@ pub struct PaymentOrderSummary {
     pub expired_at: String,
 }
 
-/// 余额响应
+/// 用户余额响应（用户查询自己余额时返回）
 #[derive(Debug, Clone, Deserialize)]
-pub struct BalanceResponse {
+pub struct UserBalanceResponse {
     pub user_id: String,
     pub available_balance: String,
     pub frozen_balance: String,

@@ -241,7 +241,6 @@ pub fn Header(
 // ── localStorage 写入 ────────────────────────────
 #[cfg(target_arch = "wasm32")]
 fn write_local_storage(key: &str, value: &str) -> Option<()> {
-    use wasm_bindgen::JsCast;
     web_sys::window()?
         .local_storage()
         .ok()??

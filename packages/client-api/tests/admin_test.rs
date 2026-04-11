@@ -28,6 +28,7 @@ async fn test_list_all_users_success() {
                     "name": "Admin User",
                     "role": "admin",
                     "tenant_id": "tenant_001",
+                    "tenant_name": "Test Tenant",
                     "balance": 100.0,
                     "created_at": "2024-01-01T00:00:00Z",
                     "updated_at": "2024-01-15T00:00:00Z",
@@ -39,6 +40,7 @@ async fn test_list_all_users_success() {
                     "name": "Regular User",
                     "role": "user",
                     "tenant_id": "tenant_001",
+                    "tenant_name": "Test Tenant",
                     "balance": 50.0,
                     "created_at": "2024-01-10T00:00:00Z",
                     "updated_at": "2024-01-20T00:00:00Z",
@@ -77,6 +79,7 @@ async fn test_get_user_by_id_success() {
             "name": "Test User",
             "role": "user",
             "tenant_id": "tenant_001",
+            "tenant_name": "Test Tenant",
             "balance": 75.5,
             "created_at": "2024-01-01T00:00:00Z",
             "updated_at": "2024-01-15T00:00:00Z"
@@ -107,6 +110,7 @@ async fn test_update_user_success() {
             "name": "Updated Name",
             "role": "admin",
             "tenant_id": "tenant_001",
+            "tenant_name": "Test Tenant",
             "balance": 75.5,
             "created_at": "2024-01-01T00:00:00Z",
             "updated_at": "2024-01-20T00:00:00Z"
@@ -155,20 +159,28 @@ async fn test_update_user_balance_success() {
     Mock::given(method("POST"))
         .and(path("/api/v1/users/user_001/balance"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "success": true,
+            "message": "Balance updated",
             "user_id": "user_001",
-            "balance": 150.0,
-            "currency": "USD"
+            "amount": "50.00",
+            "reason": "Admin recharge",
+            "balance_before": "100.00",
+            "new_balance": "150.00",
+            "updated_by": "admin_001"
         })))
         .mount(&mock_server)
         .await;
 
-    let req = UpdateBalanceRequest::add(50.0);
+    let req = UpdateBalanceRequest::add(50.0, "Admin recharge");
     let result = admin_api
         .update_user_balance("user_001", &req, fixtures::TEST_ACCESS_TOKEN)
         .await;
 
     assert!(result.is_ok(), "Expected Ok, got {:?}", result);
-    assert_eq!(result.unwrap().balance, 150.0);
+    let resp = result.unwrap();
+    assert!(resp.success);
+    assert_eq!(resp.new_balance, "150.00");
+    assert_eq!(resp.balance_before, "100.00");
 }
 
 // ==================== 账号管理测试 ====================
