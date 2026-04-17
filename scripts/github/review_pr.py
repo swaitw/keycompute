@@ -1,46 +1,135 @@
 import json
 import os
+import time
 from pathlib import Path
 
 import requests
 
 
-MAX_TOTAL_PATCH_CHARS = 120_000
-MAX_FILES = 40
+MAX_TOTAL_PATCH_CHARS = int(os.getenv("OPENAI_MAX_TOTAL_PATCH_CHARS", "40_000").replace("_", ""))
+MAX_PATCH_CHARS_PER_FILE = int(
+    os.getenv("OPENAI_MAX_PATCH_CHARS_PER_FILE", "3_000").replace("_", "")
+)
+MAX_FILES = int(os.getenv("OPENAI_MAX_FILES", "20"))
+MAX_OMITTED_FILES = int(os.getenv("OPENAI_MAX_OMITTED_FILES", "20"))
+OPENAI_RETRY_ATTEMPTS = max(int(os.getenv("OPENAI_RETRY_ATTEMPTS", "4")), 1)
+OPENAI_INITIAL_BACKOFF_SECONDS = max(
+    float(os.getenv("OPENAI_INITIAL_BACKOFF_SECONDS", "5")),
+    1.0,
+)
+OPENAI_MAX_OUTPUT_TOKENS = int(os.getenv("OPENAI_MAX_OUTPUT_TOKENS", "2000"))
 MODEL = os.getenv("OPENAI_MODEL", "gpt-5")
 API_URL = "https://api.openai.com/v1/responses"
+TRANSIENT_STATUS_CODES = {429, 500, 502, 503, 504}
+CODE_EXTENSIONS = {
+    ".c",
+    ".cc",
+    ".cpp",
+    ".cs",
+    ".go",
+    ".h",
+    ".hpp",
+    ".java",
+    ".js",
+    ".jsx",
+    ".kt",
+    ".py",
+    ".rb",
+    ".rs",
+    ".swift",
+    ".ts",
+    ".tsx",
+}
+CONFIG_EXTENSIONS = {".json", ".toml", ".yaml", ".yml"}
+CONTENT_EXTENSIONS = {".css", ".html", ".md", ".scss", ".svg"}
+LOW_SIGNAL_FILENAMES = {"Cargo.lock", "package-lock.json", "pnpm-lock.yaml", "yarn.lock"}
+TRUNCATION_MARKER = "\n...[truncated]"
 
 
 def load_json(path: str):
     return json.loads(Path(path).read_text(encoding="utf-8"))
 
 
-def compact_changed_files(files):
-    compact = []
-    used_chars = 0
+def file_score(file_info):
+    filename = file_info.get("filename", "")
+    path = Path(filename)
+    patch = file_info.get("patch") or ""
+    churn = file_info.get("additions", 0) + file_info.get("deletions", 0)
 
-    for f in files[:MAX_FILES]:
+    if not patch:
+        priority = 0
+    elif path.name in LOW_SIGNAL_FILENAMES:
+        priority = 1
+    elif path.suffix.lower() in CODE_EXTENSIONS:
+        priority = 5
+    elif path.suffix.lower() in CONFIG_EXTENSIONS:
+        priority = 4
+    elif path.suffix.lower() in CONTENT_EXTENSIONS:
+        priority = 3
+    else:
+        priority = 2
+
+    return (priority, churn, len(patch))
+
+
+def summarize_file(file_info):
+    return {
+        "filename": file_info.get("filename", ""),
+        "status": file_info.get("status", ""),
+        "additions": file_info.get("additions", 0),
+        "deletions": file_info.get("deletions", 0),
+    }
+
+
+def compact_changed_files(files):
+    included_files = []
+    omitted_files = []
+    used_chars = 0
+    sorted_files = sorted(files, key=file_score, reverse=True)
+
+    for f in sorted_files:
         patch = f.get("patch") or ""
+        if not patch:
+            omitted_files.append(summarize_file(f))
+            continue
+
+        if len(included_files) >= MAX_FILES or used_chars >= MAX_TOTAL_PATCH_CHARS:
+            omitted_files.append(summarize_file(f))
+            continue
+
         remaining = MAX_TOTAL_PATCH_CHARS - used_chars
         if remaining <= 0:
-            break
+            omitted_files.append(summarize_file(f))
+            continue
 
-        if len(patch) > remaining:
-            patch = patch[:remaining] + "\n...[truncated]"
+        patch_budget = min(remaining, MAX_PATCH_CHARS_PER_FILE)
+        patch_truncated = len(patch) > patch_budget
+        if patch_truncated:
+            if patch_budget <= len(TRUNCATION_MARKER):
+                patch = TRUNCATION_MARKER[:patch_budget]
+            else:
+                patch = patch[: patch_budget - len(TRUNCATION_MARKER)] + TRUNCATION_MARKER
 
         used_chars += len(patch)
 
-        compact.append(
+        included_files.append(
             {
                 "filename": f.get("filename", ""),
                 "status": f.get("status", ""),
                 "additions": f.get("additions", 0),
                 "deletions": f.get("deletions", 0),
                 "patch": patch,
+                "patch_truncated": patch_truncated,
             }
         )
 
-    return compact
+    return {
+        "included_files": included_files,
+        "included_count": len(included_files),
+        "omitted_count": len(omitted_files),
+        "omitted_files": omitted_files[:MAX_OMITTED_FILES],
+        "total_patch_chars": used_chars,
+    }
 
 
 def build_instructions():
@@ -72,7 +161,7 @@ Output must be English Markdown with this exact structure:
 """
 
 
-def build_input(repo_name, pr, files, comment_body, comment_author):
+def build_input(repo_name, pr, compact_files, comment_body, comment_author):
     payload = {
         "repository": repo_name,
         "pr_number": pr.get("number"),
@@ -81,10 +170,16 @@ def build_input(repo_name, pr, files, comment_body, comment_author):
         "base_branch": pr.get("base", {}).get("ref", ""),
         "head_branch": pr.get("head", {}).get("ref", ""),
         "changed_files_count": pr.get("changed_files", 0),
+        "review_scope": {
+            "included_files": compact_files["included_count"],
+            "omitted_files": compact_files["omitted_count"],
+            "total_patch_chars": compact_files["total_patch_chars"],
+        },
         "trigger_comment_author": comment_author,
         "trigger_comment": comment_body,
         "pr_description": pr.get("body", ""),
-        "changed_files": files,
+        "changed_files": compact_files["included_files"],
+        "omitted_files": compact_files["omitted_files"],
     }
 
     return (
@@ -94,28 +189,81 @@ def build_input(repo_name, pr, files, comment_body, comment_author):
     )
 
 
+def extract_error_message(response: requests.Response) -> str:
+    try:
+        data = response.json()
+    except ValueError:
+        return response.text.strip()
+
+    error = data.get("error")
+    if isinstance(error, dict):
+        message = error.get("message")
+        if message:
+            return message
+        return json.dumps(error, ensure_ascii=False)
+
+    if isinstance(error, str):
+        return error
+
+    return response.text.strip()
+
+
+def retry_delay_seconds(response: requests.Response, attempt: int) -> float:
+    retry_after = response.headers.get("retry-after")
+    if retry_after:
+        try:
+            return max(float(retry_after), 1.0)
+        except ValueError:
+            pass
+
+    return OPENAI_INITIAL_BACKOFF_SECONDS * (2**attempt)
+
+
 def call_openai(instructions: str, user_input: str) -> str:
     api_key = os.environ.get("OPENAI_API_KEY")
     if not api_key:
         raise RuntimeError("OPENAI_API_KEY is not set")
 
-    response = requests.post(
-        API_URL,
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        },
-        json={
-            "model": MODEL,
-            "instructions": instructions,
-            "input": user_input,
-            "max_output_tokens": 4000,
-        },
-        timeout=180,
-    )
-    response.raise_for_status()
+    data = None
+    for attempt in range(OPENAI_RETRY_ATTEMPTS):
+        response = requests.post(
+            API_URL,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": MODEL,
+                "instructions": instructions,
+                "input": user_input,
+                "max_output_tokens": OPENAI_MAX_OUTPUT_TOKENS,
+            },
+            timeout=180,
+        )
 
-    data = response.json()
+        if response.ok:
+            data = response.json()
+            break
+
+        error_message = extract_error_message(response)
+        should_retry = (
+            response.status_code in TRANSIENT_STATUS_CODES
+            and attempt < OPENAI_RETRY_ATTEMPTS - 1
+        )
+        if should_retry:
+            time.sleep(retry_delay_seconds(response, attempt))
+            continue
+
+        if response.status_code == 429:
+            raise RuntimeError(
+                "OpenAI API rate limit or quota exceeded (429). "
+                f"Model: {MODEL}. Details: {error_message or 'Too Many Requests'}"
+            )
+
+        response.raise_for_status()
+
+    if data is None:
+        raise RuntimeError("OpenAI API request did not return a usable response")
 
     if data.get("error"):
         raise RuntimeError(f"OpenAI API error: {data['error']}")
@@ -166,6 +314,52 @@ Note: This review is generated from the PR diff and may not reflect code outside
     Path("review-output.md").write_text(review + footer, encoding="utf-8")
 
 
+def build_failure_review(error: Exception) -> str:
+    error_text = f"{type(error).__name__}: {str(error)}"
+    suggestions = [
+        "- Check repository secrets.",
+        "- Check OpenAI API access and model availability.",
+        "- Check the workflow logs for the request/response path.",
+    ]
+    tests = [
+        "- Re-run the workflow.",
+        "- Verify `OPENAI_API_KEY`.",
+        "- Verify that `pr.json` and `pr_files.json` contain valid data.",
+    ]
+
+    lowered = error_text.lower()
+    if "429" in error_text or "rate limit" in lowered or "quota" in lowered:
+        suggestions = [
+            "- The request hit an OpenAI rate or quota limit; this is usually not caused by a missing repository secret.",
+            "- Retry after a short wait, or reduce the diff context and retry with the same comment trigger.",
+            "- Verify the project behind `OPENAI_API_KEY` has active billing/quota for the selected model.",
+        ]
+        tests = [
+            "- Re-run the workflow after a short delay.",
+            "- Trigger the review on a smaller PR or after trimming the prompt budget.",
+            "- Confirm the API project attached to `OPENAI_API_KEY` can still call the configured model.",
+        ]
+
+    return f"""## Title
+GPT PR Review
+
+## Overall Assessment
+The automated review failed before producing a normal result.
+
+## Blocking Issues
+- Workflow/runtime error: `{error_text}`
+
+## Non-blocking Suggestions
+{chr(10).join(suggestions)}
+
+## Suggested Tests
+{chr(10).join(tests)}
+
+## Conclusion
+The review could not be completed due to an execution error.
+"""
+
+
 def main():
     repo_name = os.environ.get("REPO_NAME", "")
     comment_body = os.environ.get("COMMENT_BODY", "")
@@ -179,7 +373,7 @@ def main():
     user_input = build_input(
         repo_name=repo_name,
         pr=pr,
-        files=compact_files,
+        compact_files=compact_files,
         comment_body=comment_body,
         comment_author=comment_author,
     )
@@ -187,28 +381,7 @@ def main():
     try:
         review = call_openai(instructions, user_input)
     except Exception as e:
-        review = f"""## Title
-GPT PR Review
-
-## Overall Assessment
-The automated review failed before producing a normal result.
-
-## Blocking Issues
-- Workflow/runtime error: `{type(e).__name__}: {str(e)}`
-
-## Non-blocking Suggestions
-- Check repository secrets.
-- Check OpenAI API access and model availability.
-- Check the workflow logs for the request/response path.
-
-## Suggested Tests
-- Re-run the workflow.
-- Verify `OPENAI_API_KEY`.
-- Verify that `pr.json` and `pr_files.json` contain valid data.
-
-## Conclusion
-The review could not be completed due to an execution error.
-"""
+        review = build_failure_review(e)
 
     write_output(review)
 

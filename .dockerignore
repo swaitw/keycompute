@@ -33,7 +33,7 @@ packages/mobile/dist/
 *.md
 !README.md
 LICENSE
-docs/__pycache__/
+**/__pycache__/
 
 # ── 测试文件（生产镜像不需要，但 Cargo workspace 解析需要目录存在，只排除源码）──
 # 注意：不能排除整个 crates/integration-tests/ 目录
