@@ -105,15 +105,12 @@ async fn test_update_user_success() {
     Mock::given(method("PUT"))
         .and(path("/api/v1/users/user_001"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "id": "user_001",
+            "success": true,
+            "message": "User updated successfully",
+            "user_id": "user_001",
             "email": "updated@example.com",
             "name": "Updated Name",
-            "role": "admin",
-            "tenant_id": "tenant_001",
-            "tenant_name": "Test Tenant",
-            "balance": 75.5,
-            "created_at": "2024-01-01T00:00:00Z",
-            "updated_at": "2024-01-20T00:00:00Z"
+            "role": "admin"
         })))
         .mount(&mock_server)
         .await;
@@ -127,6 +124,8 @@ async fn test_update_user_success() {
 
     assert!(result.is_ok());
     let user = result.unwrap();
+    assert!(user.success);
+    assert_eq!(user.user_id, "user_001");
     assert_eq!(user.name, Some("Updated Name".to_string()));
 }
 
