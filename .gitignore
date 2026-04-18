@@ -21,6 +21,7 @@ target
 #.idea/
 
 **/__pycache__/
+test.py
 
 config.toml
 

@@ -8,12 +8,8 @@ from openai import OpenAI
 # 配置
 
 API_URL="http://192.168.100.100:3000/v1"
-API_KEY="sk-cf305348ea684a09bcdcc284df7c56e09b92f9eecd4b462e"
+API_KEY="sk-xxxxxxxxxx"
 API_MODEL="deepseek-chat"
-
-# API_URL="https://l98bpnylfm-80.cnb.run/v1"
-# API_KEY="sk-4c027bf3f61241c1a6cd3d2c1c0dcfc701f51db4b86345c3"
-# API_MODEL="gemma3:270m"
 
 client = OpenAI(base_url=API_URL, api_key=API_KEY)
 
