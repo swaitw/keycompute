@@ -1,5 +1,6 @@
 //! 管理功能模块集成测试
 
+use client_api::AssignableUserRole;
 use client_api::api::admin::{
     AdminApi, CalculateCostRequest, CreateAccountRequest, CreatePricingRequest,
     UpdateBalanceRequest, UpdateUserRequest,
@@ -117,7 +118,7 @@ async fn test_update_user_success() {
 
     let req = UpdateUserRequest::new()
         .with_name("Updated Name")
-        .with_role("admin");
+        .with_role(AssignableUserRole::Admin);
     let result = admin_api
         .update_user("user_001", &req, fixtures::TEST_ACCESS_TOKEN)
         .await;

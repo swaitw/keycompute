@@ -22,13 +22,52 @@ CREATE TABLE users (
     tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
     email VARCHAR(255) NOT NULL UNIQUE,
     name VARCHAR(255),
-    role VARCHAR(50) NOT NULL DEFAULT 'user',
+    role VARCHAR(50) NOT NULL DEFAULT 'user'
+        CONSTRAINT chk_users_role_allowed CHECK (role IN ('system', 'admin', 'user')),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX idx_users_tenant_id ON users(tenant_id);
 CREATE INDEX idx_users_email ON users(email);
+CREATE UNIQUE INDEX uq_users_single_system_role ON users (role) WHERE role = 'system';
+
+CREATE OR REPLACE FUNCTION prevent_system_role_change()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF OLD.role = 'system' AND NEW.role <> 'system' THEN
+        RAISE EXCEPTION 'system user role cannot be changed';
+    END IF;
+
+    IF OLD.role <> 'system' AND NEW.role = 'system' THEN
+        RAISE EXCEPTION 'system role cannot be assigned by update';
+    END IF;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_prevent_system_role_change
+BEFORE UPDATE OF role ON users
+FOR EACH ROW
+EXECUTE FUNCTION prevent_system_role_change();
+
+CREATE OR REPLACE FUNCTION prevent_system_user_delete()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF OLD.role = 'system' THEN
+        RAISE EXCEPTION 'system user cannot be deleted';
+    END IF;
+
+    RETURN OLD;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_prevent_system_user_delete
+BEFORE DELETE ON users
+FOR EACH ROW
+EXECUTE FUNCTION prevent_system_user_delete();
+
 -- produce_ai_keys: Produce AI Key 表（用户访问系统的 API Key）
 CREATE TABLE produce_ai_keys (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -451,7 +490,9 @@ CREATE TABLE IF NOT EXISTS system_settings (
     -- 设置键名（唯一）
     key VARCHAR(100) UNIQUE NOT NULL,
     -- 设置值（以字符串形式存储）
-    value TEXT NOT NULL,
+    value TEXT NOT NULL
+        CONSTRAINT chk_system_settings_default_user_role
+        CHECK (key <> 'default_user_role' OR value = 'user'),
     -- 值类型：string, bool, int, decimal, json
     value_type VARCHAR(20) NOT NULL DEFAULT 'string',
     -- 设置描述

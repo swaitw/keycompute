@@ -17,6 +17,7 @@ use keycompute_db::{
 };
 use keycompute_observability::{init_dev_observability, init_observability};
 use keycompute_server::{AppState, AppStateConfig, init_global_crypto, run};
+use keycompute_types::UserRole;
 use std::sync::Arc;
 use tracing::{error, info, warn};
 
@@ -200,29 +201,59 @@ async fn initialize_default_admin(pool: &sqlx::PgPool) -> anyhow::Result<()> {
 
     info!(email = %admin_email, "检查默认管理员账户");
 
-    // 检查管理员是否已存在
-    if User::find_by_email(pool, &admin_email).await?.is_some() {
-        info!(email = %admin_email, "默认管理员已存在，跳过初始化");
+    // 只要已经存在 system 用户，就视为默认系统管理员已完成初始化。
+    let existing_system_user = sqlx::query_as::<_, User>(
+        "SELECT * FROM users WHERE role = 'system' ORDER BY created_at ASC LIMIT 1",
+    )
+    .fetch_optional(pool)
+    .await?;
+
+    if let Some(user) = existing_system_user {
+        if user.email == admin_email {
+            info!(email = %admin_email, user_id = %user.id, "默认系统管理员已存在，跳过初始化");
+        } else {
+            warn!(
+                configured_email = %admin_email,
+                existing_email = %user.email,
+                user_id = %user.id,
+                "已存在 system 用户，跳过默认管理员初始化"
+            );
+        }
         return Ok(());
+    }
+
+    // 没有 system 用户时，配置邮箱也不能被普通账号占用。
+    if let Some(existing_user) = User::find_by_email(pool, &admin_email).await? {
+        anyhow::bail!(
+            "cannot initialize system admin: email {} is already used by non-system user {}",
+            admin_email,
+            existing_user.id
+        );
     }
 
     info!(email = %admin_email, "创建默认系统管理员");
 
-    // 创建默认租户
-    let tenant = Tenant::create(
-        pool,
-        &CreateTenantRequest {
-            name: "System".to_string(),
-            slug: "system".to_string(),
-            description: Some("System default tenant".to_string()),
-            default_rpm_limit: None,
-            default_tpm_limit: None,
-            distribution_enabled: None,
-        },
-    )
-    .await?;
+    // 复用或创建默认 system 租户
+    let tenant = if let Some(existing_tenant) = Tenant::find_by_slug(pool, "system").await? {
+        info!(tenant_id = %existing_tenant.id, "复用已有 system 租户");
+        existing_tenant
+    } else {
+        let tenant = Tenant::create(
+            pool,
+            &CreateTenantRequest {
+                name: "System".to_string(),
+                slug: "system".to_string(),
+                description: Some("System default tenant".to_string()),
+                default_rpm_limit: None,
+                default_tpm_limit: None,
+                distribution_enabled: None,
+            },
+        )
+        .await?;
 
-    info!(tenant_id = %tenant.id, "默认租户创建成功");
+        info!(tenant_id = %tenant.id, "默认租户创建成功");
+        tenant
+    };
 
     // 创建管理员用户（role="system" 表示系统管理员）
     let user = User::create(
@@ -231,7 +262,7 @@ async fn initialize_default_admin(pool: &sqlx::PgPool) -> anyhow::Result<()> {
             tenant_id: tenant.id,
             email: admin_email.clone(),
             name: Some("System Administrator".to_string()),
-            role: Some("system".to_string()),
+            role: Some(UserRole::System),
         },
     )
     .await?;

@@ -18,6 +18,7 @@ urlencoding = "2"
 
 # 时间处理
 chrono = { version = "0.4", features = ["serde"] }
+keycompute-types = { workspace = true }
 
 # UUID（js feature 为 WASM 目标提供随机数源）
 uuid = { version = "1", features = ["v4", "serde", "js"] }

@@ -671,6 +671,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "gloo-timers",
+ "keycompute-types",
  "reqwest",
  "serde",
  "serde_json",

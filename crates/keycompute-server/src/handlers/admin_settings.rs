@@ -11,6 +11,7 @@ use axum::{
     Json,
     extract::{Path, State},
 };
+use keycompute_db::models::system_setting::setting_keys;
 use serde::{Deserialize, Serialize};
 
 // ==================== 系统设置 ====================
@@ -28,7 +29,6 @@ pub struct AdminSystemSettings {
     pub allow_registration: bool,
     pub email_verification_required: bool,
     pub default_user_quota: f64,
-    pub default_user_role: String,
 
     // 限流设置
     pub default_rpm_limit: i32,
@@ -112,8 +112,6 @@ impl AdminSystemSettings {
             allow_registration: get_bool(setting_keys::ALLOW_REGISTRATION, true),
             email_verification_required: get_bool(setting_keys::EMAIL_VERIFICATION_REQUIRED, true),
             default_user_quota: get_decimal(setting_keys::DEFAULT_USER_QUOTA, 10.0),
-            default_user_role: get_value(setting_keys::DEFAULT_USER_ROLE)
-                .unwrap_or_else(|| "user".to_string()),
 
             default_rpm_limit: get_int(setting_keys::DEFAULT_RPM_LIMIT, 60),
             default_tpm_limit: get_int(setting_keys::DEFAULT_TPM_LIMIT, 100000),
@@ -151,6 +149,32 @@ impl AdminSystemSettings {
     }
 }
 
+fn is_hidden_setting(key: &str) -> bool {
+    key == setting_keys::DEFAULT_USER_ROLE
+}
+
+fn normalize_setting_update(key: &str, value: impl Into<String>) -> Result<String> {
+    if is_hidden_setting(key) {
+        return Err(ApiError::BadRequest(format!(
+            "Setting {} is fixed and cannot be edited",
+            key
+        )));
+    }
+
+    let value = value.into();
+
+    Ok(value)
+}
+
+fn normalize_settings_map(
+    settings: std::collections::HashMap<String, String>,
+) -> Result<std::collections::HashMap<String, String>> {
+    settings
+        .into_iter()
+        .map(|(key, value)| Ok((key.clone(), normalize_setting_update(&key, value)?)))
+        .collect()
+}
+
 /// 获取系统设置（管理员）
 ///
 /// GET /api/v1/admin/settings
@@ -175,6 +199,7 @@ pub async fn get_system_settings(
     // value 根据 value_type 转换为对应的 JSON 类型
     let map: std::collections::HashMap<String, serde_json::Value> = settings
         .into_iter()
+        .filter(|s| !is_hidden_setting(&s.key))
         .map(|s| {
             let val = match s.value_type.as_str() {
                 "bool" => match s.value.as_str() {
@@ -234,6 +259,8 @@ pub async fn update_system_settings(
             return Err(ApiError::BadRequest("Invalid request body".to_string()));
         };
 
+    let settings_map = normalize_settings_map(settings_map)?;
+
     // 批量更新设置
     let updated = keycompute_db::SystemSetting::batch_update(pool, &settings_map)
         .await
@@ -269,6 +296,10 @@ pub async fn get_system_setting_by_key(
         .as_ref()
         .ok_or_else(|| ApiError::Internal("Database not configured".to_string()))?;
 
+    if is_hidden_setting(&key) {
+        return Err(ApiError::NotFound(format!("Setting not found: {}", key)));
+    }
+
     let setting = keycompute_db::SystemSetting::find_by_key(pool, &key)
         .await
         .map_err(|e| ApiError::Internal(format!("Failed to query setting: {}", e)))?
@@ -295,7 +326,13 @@ pub async fn update_system_setting_by_key(
         .as_ref()
         .ok_or_else(|| ApiError::Internal("Database not configured".to_string()))?;
 
-    let setting = keycompute_db::SystemSetting::update_value(pool, &key, &payload.value)
+    if is_hidden_setting(&key) {
+        return Err(ApiError::NotFound(format!("Setting not found: {}", key)));
+    }
+
+    let normalized_value = normalize_setting_update(&key, payload.value)?;
+
+    let setting = keycompute_db::SystemSetting::update_value(pool, &key, &normalized_value)
         .await
         .map_err(|e| ApiError::Internal(format!("Failed to update setting: {}", e)))?;
 
@@ -326,4 +363,29 @@ pub async fn get_public_settings(
     };
 
     Ok(Json(settings))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_hidden_setting_marks_default_user_role() {
+        assert!(is_hidden_setting(setting_keys::DEFAULT_USER_ROLE));
+        assert!(!is_hidden_setting("site_name"));
+    }
+
+    #[test]
+    fn test_normalize_setting_update_rejects_default_user_role() {
+        let err = normalize_setting_update(setting_keys::DEFAULT_USER_ROLE, "user").unwrap_err();
+        assert!(matches!(err, ApiError::BadRequest(msg) if msg.contains("cannot be edited")));
+    }
+
+    #[test]
+    fn test_normalize_setting_update_accepts_normal_setting() {
+        assert_eq!(
+            normalize_setting_update("site_name", "KeyCompute").unwrap(),
+            "KeyCompute"
+        );
+    }
 }

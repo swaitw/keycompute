@@ -1,5 +1,5 @@
 use client_api::{
-    AdminApi,
+    AdminApi, AssignableUserRole, UserRole,
     api::admin::{UpdateUserRequest, UserDetail, UserListResponse, UserQueryParams},
 };
 use dioxus::prelude::*;
@@ -37,10 +37,24 @@ pub fn Users() -> Element {
 #[component]
 fn AdminUsersView() -> Element {
     let i18n = use_i18n();
+    let user_store = use_context::<UserStore>();
     let auth_store = use_context::<AuthStore>();
     let mut ui_store = use_context::<UiStore>();
     let mut search = use_signal(String::new);
     let mut page = use_signal(|| 1u32);
+    let current_user = user_store.info.read().clone();
+    let can_current_user_manage_roles = current_user
+        .as_ref()
+        .map(|u| u.role == UserRole::System.as_str())
+        .unwrap_or(false);
+    let current_user_id = current_user
+        .as_ref()
+        .map(|u| u.id.clone())
+        .unwrap_or_default();
+    let current_user_id_for_edit = current_user_id.clone();
+    let can_current_user_manage_roles_for_edit = can_current_user_manage_roles;
+    let current_user_id_for_delete = current_user_id.clone();
+    let can_current_user_delete_admins = can_current_user_manage_roles;
 
     // 编辑弹窗状态
     let mut edit_user = use_signal(|| Option::<UserDetail>::None);
@@ -100,6 +114,20 @@ fn AdminUsersView() -> Element {
         let Some(u) = edit_user() else { return };
         let name_val = edit_name();
         let role_val = edit_role();
+        let can_edit_role = can_current_user_manage_roles_for_edit
+            && u.id != current_user_id_for_edit
+            && u.role != "system";
+        let role = if !can_edit_role || role_val.trim().is_empty() {
+            None
+        } else {
+            match role_val.parse::<AssignableUserRole>() {
+                Ok(role) => Some(role),
+                Err(err) => {
+                    ui_store.show_error(err);
+                    return;
+                }
+            }
+        };
         let id = u.id.clone();
         edit_saving.set(true);
         spawn(async move {
@@ -111,11 +139,7 @@ fn AdminUsersView() -> Element {
                 } else {
                     Some(name_val)
                 },
-                role: if role_val.trim().is_empty() {
-                    None
-                } else {
-                    Some(role_val)
-                },
+                role,
             };
             match AdminApi::new(&client).update_user(&id, &req, &token).await {
                 Ok(_) => {
@@ -134,6 +158,14 @@ fn AdminUsersView() -> Element {
     // 确认删除
     let on_delete_confirm = move |_| {
         let Some(u) = delete_user() else { return };
+        if u.id == current_user_id_for_delete
+            || u.role == UserRole::System.as_str()
+            || (u.role == UserRole::Admin.as_str() && !can_current_user_delete_admins)
+        {
+            ui_store.show_error(i18n.t("users.delete_failed"));
+            delete_user.set(None);
+            return;
+        }
         let id = u.id.clone();
         delete_saving.set(true);
         spawn(async move {
@@ -163,6 +195,10 @@ fn AdminUsersView() -> Element {
     } else {
         i18n.t("users.confirm_delete")
     };
+    let can_edit_selected_role = edit_user()
+        .as_ref()
+        .map(|u| can_current_user_manage_roles && u.id != current_user_id && u.role != "system")
+        .unwrap_or(false);
 
     rsx! {
         div { class: "page-header",
@@ -240,14 +276,18 @@ fn AdminUsersView() -> Element {
                                                 },
                                                 {i18n.t("form.edit")}
                                             }
-                                            Button {
-                                                variant: ButtonVariant::Danger,
-                                                size: ButtonSize::Small,
-                                                onclick: {
-                                                    let uu = u.clone();
-                                                    move |_| delete_user.set(Some(uu.clone()))
-                                                },
-                                                {i18n.t("form.delete")}
+                                            if u.id != current_user_id
+                                                && u.role != UserRole::System.as_str()
+                                                && (u.role != UserRole::Admin.as_str() || can_current_user_manage_roles) {
+                                                Button {
+                                                    variant: ButtonVariant::Danger,
+                                                    size: ButtonSize::Small,
+                                                    onclick: {
+                                                        let uu = u.clone();
+                                                        move |_| delete_user.set(Some(uu.clone()))
+                                                    },
+                                                    {i18n.t("form.delete")}
+                                                }
                                             }
                                         }
                                     }
@@ -298,12 +338,20 @@ fn AdminUsersView() -> Element {
                         }
                         div { class: "form-group",
                             label { class: "form-label", {i18n.t("table.role")} }
-                            select {
-                                class: "input-field",
-                                value: "{edit_role}",
-                                onchange: move |e| *edit_role.write() = e.value(),
-                                option { value: "user", "{i18n.t(\"users.role_user\")}" }
-                                option { value: "admin", "{i18n.t(\"users.role_admin\")}" }
+                            if can_edit_selected_role {
+                                select {
+                                    class: "input-field",
+                                    value: "{edit_role}",
+                                    onchange: move |e| *edit_role.write() = e.value(),
+                                    option { value: "user", "{i18n.t(\"users.role_user\")}" }
+                                    option { value: "admin", "{i18n.t(\"users.role_admin\")}" }
+                                }
+                            } else {
+                                input {
+                                    class: "input-field",
+                                    value: "{edit_role}",
+                                    readonly: true,
+                                }
                             }
                         }
                     }

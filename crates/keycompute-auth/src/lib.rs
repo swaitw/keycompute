@@ -97,11 +97,6 @@ impl AuthContext {
         self.role == "admin" || self.role == "system"
     }
 
-    /// 是否是租户管理员
-    pub fn is_tenant_admin(&self) -> bool {
-        self.role == "tenant_admin" || self.role == "admin"
-    }
-
     /// 获取用户信息（如果已加载）
     pub fn user_info(&self) -> Option<&UserInfo> {
         self.user_info.as_ref()
@@ -320,19 +315,6 @@ mod tests {
         assert!(ctx.has_permission(&Permission::UseApi));
         assert!(ctx.has_permission(&Permission::ViewUsage));
         assert!(!ctx.has_permission(&Permission::ManageUsers));
-    }
-
-    #[test]
-    fn test_auth_context_tenant_admin() {
-        let ctx = AuthContext::new(
-            Uuid::new_v4(),
-            Uuid::new_v4(),
-            Uuid::new_v4(),
-            "tenant_admin",
-        );
-
-        assert!(ctx.is_tenant_admin());
-        assert!(!ctx.is_admin());
     }
 
     #[tokio::test]

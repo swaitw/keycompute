@@ -9,7 +9,7 @@ use keycompute_db::{
     CreateUserCredentialRequest, CreateUserRequest, EmailVerification, Tenant, User, UserCredential,
 };
 use keycompute_emailserver::EmailService;
-use keycompute_types::{KeyComputeError, Result};
+use keycompute_types::{KeyComputeError, Result, UserRole};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
@@ -61,8 +61,6 @@ pub struct RegistrationService {
     email_verification_expiry_hours: i64,
     /// 是否要求邮箱验证后才能登录
     require_email_verification: bool,
-    /// 默认角色
-    default_role: String,
 }
 
 impl std::fmt::Debug for RegistrationService {
@@ -76,7 +74,6 @@ impl std::fmt::Debug for RegistrationService {
                 "require_email_verification",
                 &self.require_email_verification,
             )
-            .field("default_role", &self.default_role)
             .finish()
     }
 }
@@ -93,7 +90,6 @@ impl RegistrationService {
             email_service: None,
             email_verification_expiry_hours: 24,
             require_email_verification: true,
-            default_role: "user".to_string(),
         }
     }
 
@@ -118,12 +114,6 @@ impl RegistrationService {
     /// 设置是否要求邮箱验证
     pub fn with_email_verification_required(mut self, required: bool) -> Self {
         self.require_email_verification = required;
-        self
-    }
-
-    /// 设置默认角色
-    pub fn with_default_role(mut self, role: impl Into<String>) -> Self {
-        self.default_role = role.into();
         self
     }
 
@@ -167,7 +157,7 @@ impl RegistrationService {
                 tenant_id: tenant.id,
                 email: email.clone(),
                 name: req.name.clone(),
-                role: Some(self.default_role.clone()),
+                role: Some(UserRole::User),
             },
         )
         .await

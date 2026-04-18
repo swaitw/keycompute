@@ -58,7 +58,7 @@ impl UserInfo {
 
     /// 检查是否是管理员
     pub fn is_admin(&self) -> bool {
-        self.role == "admin" || self.role == "tenant_admin"
+        self.role == "admin" || self.role == "system"
     }
 
     /// 检查是否是系统管理员

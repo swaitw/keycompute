@@ -25,6 +25,7 @@ use keycompute_db::{
     CreateProduceAiKeyRequest, CreateTenantRequest, CreateUsageLogRequest, CreateUserRequest,
     ProduceAiKey, Tenant, UsageLog, User, run_migrations,
 };
+use keycompute_types::{AssignableUserRole, UserRole};
 use sqlx::{PgPool, postgres::PgPoolOptions};
 use std::{sync::Arc, time::Duration};
 use tokio::sync::Barrier;
@@ -66,32 +67,34 @@ fn generate_test_id() -> String {
 }
 
 /// 清理特定测试运行的数据
-async fn cleanup_test_data(pool: &PgPool, run_id: &str) {
+async fn cleanup_test_data(pool: &PgPool, run_id: &str) -> Result<(), sqlx::Error> {
+    let slug_pattern = format!("test-%-{}", run_id);
+
     // 按依赖顺序删除 - 只删除当前测试运行的数据
-    let _ = sqlx::query("DELETE FROM distribution_records WHERE tenant_id IN (SELECT id FROM tenants WHERE slug LIKE $1)")
-        .bind(format!("test-%-{}", run_id))
+    sqlx::query("DELETE FROM distribution_records WHERE tenant_id IN (SELECT id FROM tenants WHERE slug LIKE $1)")
+        .bind(&slug_pattern)
         .execute(pool)
-        .await;
-    let _ = sqlx::query(
+        .await?;
+    sqlx::query(
         "DELETE FROM usage_logs WHERE tenant_id IN (SELECT id FROM tenants WHERE slug LIKE $1)",
     )
-    .bind(format!("test-%-{}", run_id))
+    .bind(&slug_pattern)
     .execute(pool)
-    .await;
-    let _ = sqlx::query("DELETE FROM produce_ai_keys WHERE tenant_id IN (SELECT id FROM tenants WHERE slug LIKE $1)")
-        .bind(format!("test-%-{}", run_id))
+    .await?;
+    sqlx::query("DELETE FROM produce_ai_keys WHERE tenant_id IN (SELECT id FROM tenants WHERE slug LIKE $1)")
+        .bind(&slug_pattern)
         .execute(pool)
-        .await;
-    let _ = sqlx::query(
-        "DELETE FROM users WHERE tenant_id IN (SELECT id FROM tenants WHERE slug LIKE $1)",
-    )
-    .bind(format!("test-%-{}", run_id))
-    .execute(pool)
-    .await;
-    let _ = sqlx::query("DELETE FROM tenants WHERE slug LIKE $1")
-        .bind(format!("test-%-{}", run_id))
+        .await?;
+    sqlx::query("DELETE FROM users WHERE tenant_id IN (SELECT id FROM tenants WHERE slug LIKE $1)")
+        .bind(&slug_pattern)
         .execute(pool)
-        .await;
+        .await?;
+    sqlx::query("DELETE FROM tenants WHERE slug LIKE $1")
+        .bind(&slug_pattern)
+        .execute(pool)
+        .await?;
+
+    Ok(())
 }
 
 /// 创建测试租户
@@ -120,7 +123,7 @@ async fn create_test_user(pool: &PgPool, tenant_id: Uuid, suffix: &str, test_id:
             tenant_id,
             email: format!("test-{}-{}@example.com", suffix, test_id),
             name: Some(format!("Test User {}", suffix)),
-            role: Some("user".to_string()),
+            role: Some(UserRole::User),
         },
     )
     .await
@@ -219,7 +222,9 @@ async fn test_tenant_crud() {
 
     let pool = create_test_pool().await;
     let test_id = generate_test_id();
-    cleanup_test_data(&pool, &test_id).await;
+    cleanup_test_data(&pool, &test_id)
+        .await
+        .expect("test_tenant_crud cleanup should succeed");
 
     // 1. 创建租户
     let tenant = create_test_tenant(&pool, "crud", &test_id).await;
@@ -333,7 +338,9 @@ async fn test_user_crud() {
 
     let pool = create_test_pool().await;
     let test_id = generate_test_id();
-    cleanup_test_data(&pool, &test_id).await;
+    cleanup_test_data(&pool, &test_id)
+        .await
+        .expect("test_api_key_crud cleanup should succeed");
 
     // 1. 创建租户和用户
     let tenant = create_test_tenant(&pool, "user-crud", &test_id).await;
@@ -386,7 +393,7 @@ async fn test_user_crud() {
     // 5. 更新用户
     let update_req = keycompute_db::UpdateUserRequest {
         name: Some("Updated User Name".to_string()),
-        role: Some("admin".to_string()),
+        role: Some(AssignableUserRole::Admin),
     };
     let updated = user.update(&pool, &update_req).await;
     chain.add_step(
@@ -412,6 +419,235 @@ async fn test_user_crud() {
     assert!(chain.all_passed(), "User CRUD tests failed");
 }
 
+/// 测试 users.role 数据库约束
+#[tokio::test]
+async fn test_user_role_constraint_rejects_invalid_role() {
+    let pool = create_test_pool().await;
+    let run_id = generate_test_id();
+    let tenant = create_test_tenant(&pool, "role-constraint", &run_id).await;
+
+    let result = sqlx::query(
+        r#"
+        INSERT INTO users (tenant_id, email, name, role)
+        VALUES ($1, $2, $3, $4)
+        "#,
+    )
+    .bind(tenant.id)
+    .bind(format!("invalid-role-{}@example.com", run_id))
+    .bind("Invalid Role User")
+    .bind("tenant_admin")
+    .execute(&pool)
+    .await;
+
+    cleanup_test_data(&pool, &run_id)
+        .await
+        .expect("test_user_role_constraint_rejects_invalid_role cleanup should succeed");
+
+    let err = result.expect_err("invalid role insert should be rejected");
+    assert!(err.to_string().contains("chk_users_role_allowed"));
+}
+
+/// 测试 default_user_role 数据库约束
+#[tokio::test]
+async fn test_default_user_role_setting_constraint_rejects_invalid_role() {
+    let pool = create_test_pool().await;
+
+    let result = sqlx::query(
+        r#"
+        UPDATE system_settings
+        SET value = $1
+        WHERE key = 'default_user_role'
+        "#,
+    )
+    .bind("tenant_admin")
+    .execute(&pool)
+    .await;
+
+    let err = result.expect_err("invalid default_user_role should be rejected");
+    assert!(
+        err.to_string()
+            .contains("chk_system_settings_default_user_role")
+    );
+}
+
+/// 测试 system 角色全局唯一约束
+#[tokio::test]
+async fn test_system_role_unique_index_rejects_duplicate_system_user() {
+    let pool = create_test_pool().await;
+    let run_id = generate_test_id();
+    let mut tx = pool.begin().await.expect("transaction should start");
+    let tenant_a_id = Uuid::new_v4();
+    let tenant_b_id = Uuid::new_v4();
+
+    sqlx::query("INSERT INTO tenants (id, name, slug, description) VALUES ($1, $2, $3, $4)")
+        .bind(tenant_a_id)
+        .bind("System Unique A")
+        .bind(format!("test-tenant-system-unique-a-{}", run_id))
+        .bind("System unique A")
+        .execute(&mut *tx)
+        .await
+        .expect("tenant A should be inserted");
+
+    sqlx::query("INSERT INTO tenants (id, name, slug, description) VALUES ($1, $2, $3, $4)")
+        .bind(tenant_b_id)
+        .bind("System Unique B")
+        .bind(format!("test-tenant-system-unique-b-{}", run_id))
+        .bind("System unique B")
+        .execute(&mut *tx)
+        .await
+        .expect("tenant B should be inserted");
+
+    sqlx::query("INSERT INTO users (tenant_id, email, name, role) VALUES ($1, $2, $3, $4)")
+        .bind(tenant_a_id)
+        .bind(format!("system-a-{}@example.com", run_id))
+        .bind("System A")
+        .bind("system")
+        .execute(&mut *tx)
+        .await
+        .expect("first system user should be created");
+
+    let result =
+        sqlx::query("INSERT INTO users (tenant_id, email, name, role) VALUES ($1, $2, $3, $4)")
+            .bind(tenant_b_id)
+            .bind(format!("system-b-{}@example.com", run_id))
+            .bind("System B")
+            .bind("system")
+            .execute(&mut *tx)
+            .await;
+
+    let err = result.expect_err("duplicate system user should be rejected");
+    assert!(err.to_string().contains("uq_users_single_system_role"));
+    tx.rollback()
+        .await
+        .expect("transaction rollback should succeed");
+}
+
+/// 测试禁止将 system 用户降级
+#[tokio::test]
+async fn test_system_role_change_trigger_rejects_downgrade() {
+    let pool = create_test_pool().await;
+    let run_id = generate_test_id();
+    let mut tx = pool.begin().await.expect("transaction should start");
+    let tenant_id = Uuid::new_v4();
+    let user_id = Uuid::new_v4();
+
+    sqlx::query("INSERT INTO tenants (id, name, slug, description) VALUES ($1, $2, $3, $4)")
+        .bind(tenant_id)
+        .bind("System Downgrade")
+        .bind(format!("test-tenant-system-role-downgrade-{}", run_id))
+        .bind("System role downgrade")
+        .execute(&mut *tx)
+        .await
+        .expect("tenant should be inserted");
+
+    sqlx::query("INSERT INTO users (id, tenant_id, email, name, role) VALUES ($1, $2, $3, $4, $5)")
+        .bind(user_id)
+        .bind(tenant_id)
+        .bind(format!("system-downgrade-{}@example.com", run_id))
+        .bind("System Downgrade")
+        .bind("system")
+        .execute(&mut *tx)
+        .await
+        .expect("system user should be created for downgrade trigger test");
+
+    let result = sqlx::query("UPDATE users SET role = 'user' WHERE id = $1")
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await;
+
+    let err = result.expect_err("system role downgrade should be rejected");
+    assert!(
+        err.to_string()
+            .contains("system user role cannot be changed")
+    );
+    tx.rollback()
+        .await
+        .expect("transaction rollback should succeed");
+}
+
+/// 测试禁止通过更新将普通用户提升为 system
+#[tokio::test]
+async fn test_system_role_change_trigger_rejects_promotion() {
+    let pool = create_test_pool().await;
+    let run_id = generate_test_id();
+    let mut tx = pool.begin().await.expect("transaction should start");
+    let tenant_id = Uuid::new_v4();
+    let user_id = Uuid::new_v4();
+
+    sqlx::query("INSERT INTO tenants (id, name, slug, description) VALUES ($1, $2, $3, $4)")
+        .bind(tenant_id)
+        .bind("System Promotion")
+        .bind(format!("test-tenant-system-role-promotion-{}", run_id))
+        .bind("System role promotion")
+        .execute(&mut *tx)
+        .await
+        .expect("tenant should be inserted");
+
+    sqlx::query("INSERT INTO users (id, tenant_id, email, name, role) VALUES ($1, $2, $3, $4, $5)")
+        .bind(user_id)
+        .bind(tenant_id)
+        .bind(format!("user-promotion-{}@example.com", run_id))
+        .bind("Promotion User")
+        .bind("user")
+        .execute(&mut *tx)
+        .await
+        .expect("user should be created for promotion trigger test");
+
+    let result = sqlx::query("UPDATE users SET role = 'system' WHERE id = $1")
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await;
+
+    let err = result.expect_err("promotion to system should be rejected");
+    assert!(
+        err.to_string()
+            .contains("system role cannot be assigned by update")
+    );
+    tx.rollback()
+        .await
+        .expect("transaction rollback should succeed");
+}
+
+/// 测试 system 用户删除触发器
+#[tokio::test]
+async fn test_system_user_delete_trigger_rejects_direct_delete() {
+    let pool = create_test_pool().await;
+    let run_id = generate_test_id();
+    let mut tx = pool.begin().await.expect("transaction should start");
+    let tenant_id = Uuid::new_v4();
+    let user_id = Uuid::new_v4();
+
+    sqlx::query("INSERT INTO tenants (id, name, slug, description) VALUES ($1, $2, $3, $4)")
+        .bind(tenant_id)
+        .bind("System Delete Guard")
+        .bind(format!("test-tenant-system-delete-guard-{}", run_id))
+        .bind("System delete guard")
+        .execute(&mut *tx)
+        .await
+        .expect("tenant should be inserted");
+
+    sqlx::query("INSERT INTO users (id, tenant_id, email, name, role) VALUES ($1, $2, $3, $4, $5)")
+        .bind(user_id)
+        .bind(tenant_id)
+        .bind(format!("system-delete-guard-{}@example.com", run_id))
+        .bind("System Guard")
+        .bind("system")
+        .execute(&mut *tx)
+        .await
+        .expect("system user should be created for trigger test");
+
+    let result = sqlx::query("DELETE FROM users WHERE id = $1")
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await;
+
+    let err = result.expect_err("system user delete should be rejected");
+    assert!(err.to_string().contains("system user cannot be deleted"));
+    tx.rollback()
+        .await
+        .expect("transaction rollback should succeed");
+}
+
 // ============================================================================
 // API Key 测试
 // ============================================================================
@@ -423,7 +659,9 @@ async fn test_api_key_operations() {
 
     let pool = create_test_pool().await;
     let test_id = generate_test_id();
-    cleanup_test_data(&pool, &test_id).await;
+    cleanup_test_data(&pool, &test_id)
+        .await
+        .expect("test_usage_log_crud cleanup should succeed");
 
     // 1. 创建租户和用户
     let tenant = create_test_tenant(&pool, "apikey", &test_id).await;
@@ -515,7 +753,9 @@ async fn test_usage_log_operations() {
 
     let pool = create_test_pool().await;
     let test_id = generate_test_id();
-    cleanup_test_data(&pool, &test_id).await;
+    cleanup_test_data(&pool, &test_id)
+        .await
+        .expect("test_transaction_handling cleanup should succeed");
 
     // 1. 创建测试数据
     let tenant = create_test_tenant(&pool, "usage", &test_id).await;
@@ -654,7 +894,9 @@ async fn test_multi_tenant_isolation() {
 
     let pool = create_test_pool().await;
     let test_id = generate_test_id();
-    cleanup_test_data(&pool, &test_id).await;
+    cleanup_test_data(&pool, &test_id)
+        .await
+        .expect("test_concurrent_operations cleanup should succeed");
 
     // 1. 创建两个租户
     let tenant1 = create_test_tenant(&pool, "isolation-1", &test_id).await;
@@ -731,7 +973,9 @@ async fn test_concurrent_operations() {
 
     let pool = create_test_pool().await;
     let test_id = generate_test_id();
-    cleanup_test_data(&pool, &test_id).await;
+    cleanup_test_data(&pool, &test_id)
+        .await
+        .expect("test_tenant_isolation cleanup should succeed");
 
     // 1. 创建租户
     let tenant = create_test_tenant(&pool, "concurrent", &test_id).await;
@@ -756,7 +1000,7 @@ async fn test_concurrent_operations() {
                     tenant_id,
                     email,
                     name: Some(format!("Concurrent User {}", i)),
-                    role: Some("user".to_string()),
+                    role: Some(UserRole::User),
                 },
             )
             .await
@@ -820,7 +1064,9 @@ async fn test_database_transaction() {
 
     let pool = create_test_pool().await;
     let test_id = generate_test_id();
-    cleanup_test_data(&pool, &test_id).await;
+    cleanup_test_data(&pool, &test_id)
+        .await
+        .expect("test_cascade_delete cleanup should succeed");
 
     // 1. 测试事务提交
     let tx_slug = format!("test-tx-tenant-{}", test_id);
@@ -896,7 +1142,9 @@ async fn test_full_business_chain() {
 
     let pool = create_test_pool().await;
     let test_id = generate_test_id();
-    cleanup_test_data(&pool, &test_id).await;
+    cleanup_test_data(&pool, &test_id)
+        .await
+        .expect("test_batch_operations cleanup should succeed");
 
     // 1. 创建租户
     let tenant = create_test_tenant(&pool, "full-chain", &test_id).await;
