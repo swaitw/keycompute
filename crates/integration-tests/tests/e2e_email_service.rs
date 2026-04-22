@@ -300,7 +300,7 @@ fn test_email_service_config() {
         "keycompute-emailserver",
         "EmailConfig::smtp_port",
         format!("SMTP端口: {}", config.smtp_port),
-        config.smtp_port == 587,
+        config.smtp_port == 465,
     );
     chain.add_step(
         "keycompute-emailserver",

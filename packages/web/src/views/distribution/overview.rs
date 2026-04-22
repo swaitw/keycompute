@@ -11,6 +11,21 @@ use crate::stores::{
 };
 use crate::utils::time::format_time;
 
+/// 复制文本到剪贴板（WASM 环境）
+fn copy_to_clipboard(text: &str) {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = web_sys::window().map(|w| {
+            let clipboard = w.navigator().clipboard();
+            clipboard.write_text(text)
+        });
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = text;
+    }
+}
+
 #[component]
 pub fn DistributionOverview() -> Element {
     let i18n = use_i18n();
@@ -55,6 +70,7 @@ pub fn DistributionOverview() -> Element {
 fn DistributionOverviewContent() -> Element {
     let i18n = use_i18n();
     let auth_store = use_context::<AuthStore>();
+    let mut ui_store = use_context::<UiStore>();
 
     // 收益数据
     let earnings = use_resource(move || async move {
@@ -106,6 +122,8 @@ fn DistributionOverviewContent() -> Element {
         Some(Ok(ref r)) => r.referral_link.clone(),
         _ => String::new(),
     };
+    let invite_link_text = invite_link.clone();
+    let copied_text = i18n.t("common.copied").to_string();
 
     rsx! {
         div {
@@ -162,7 +180,20 @@ fn DistributionOverviewContent() -> Element {
                             div { class: "info-item",
                                 span { class: "info-label", {i18n.t("distribution.invite_link")} }
                                 span { class: "info-value",
-                                    a { href: "{invite_link}", target: "_blank", "{invite_link}" }
+                                    button {
+                                        class: "distribution-copy-value",
+                                        r#type: "button",
+                                        title: "{copied_text}",
+                                        onclick: {
+                                            let invite_link = invite_link_text.clone();
+                                            let copied_text = copied_text.clone();
+                                            move |_| {
+                                                copy_to_clipboard(&invite_link);
+                                                ui_store.show_success(copied_text.clone());
+                                            }
+                                        },
+                                        "{invite_link_text}"
+                                    }
                                 }
                             }
                         }

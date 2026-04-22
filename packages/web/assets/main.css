@@ -2329,6 +2329,22 @@ select.form-input:focus {
   word-break: break-word;
 }
 
+.distribution-copy-value {
+  display: block;
+  width: 100%;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  word-break: break-word;
+  background: transparent;
+  border: 0;
+}
+
+.distribution-copy-value:hover {
+  color: var(--color-primary, #2563eb);
+}
+
 .setting-input-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
