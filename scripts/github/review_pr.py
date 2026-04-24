@@ -46,6 +46,14 @@ LOW_SIGNAL_FILENAMES = {"Cargo.lock", "package-lock.json", "pnpm-lock.yaml", "ya
 TRUNCATION_MARKER = "\n...[truncated]"
 
 
+class OpenAIRequestError(RuntimeError):
+    def __init__(self, message: str, *, status_code: int | None = None, error_type: str = "", error_code: str = ""):
+        super().__init__(message)
+        self.status_code = status_code
+        self.error_type = error_type
+        self.error_code = error_code
+
+
 def load_json(path: str):
     return json.loads(Path(path).read_text(encoding="utf-8"))
 
@@ -208,6 +216,26 @@ def extract_error_message(response: requests.Response) -> str:
     return response.text.strip()
 
 
+def extract_error_details(response: requests.Response) -> tuple[str, str, str]:
+    try:
+        data = response.json()
+    except ValueError:
+        return "", "", response.text.strip()
+
+    error = data.get("error")
+    if not isinstance(error, dict):
+        if isinstance(error, str):
+            return "", "", error
+        return "", "", response.text.strip()
+
+    error_type = str(error.get("type") or "").strip()
+    error_code = str(error.get("code") or "").strip()
+    error_message = str(error.get("message") or "").strip()
+    if not error_message:
+        error_message = json.dumps(error, ensure_ascii=False)
+    return error_type, error_code, error_message
+
+
 def retry_delay_seconds(response: requests.Response, attempt: int) -> float:
     retry_after = response.headers.get("retry-after")
     if retry_after:
@@ -217,6 +245,15 @@ def retry_delay_seconds(response: requests.Response, attempt: int) -> float:
             pass
 
     return OPENAI_INITIAL_BACKOFF_SECONDS * (2**attempt)
+
+
+def is_insufficient_quota(status_code: int, error_type: str, error_code: str, error_message: str) -> bool:
+    lowered = f"{error_type} {error_code} {error_message}".lower()
+    return status_code == 429 and (
+        "insufficient_quota" in lowered
+        or "billing_hard_limit_reached" in lowered
+        or "exceeded your current quota" in lowered
+    )
 
 
 def call_openai(instructions: str, user_input: str) -> str:
@@ -245,19 +282,38 @@ def call_openai(instructions: str, user_input: str) -> str:
             data = response.json()
             break
 
-        error_message = extract_error_message(response)
+        error_type, error_code, error_message = extract_error_details(response)
         should_retry = (
             response.status_code in TRANSIENT_STATUS_CODES
+            and not is_insufficient_quota(response.status_code, error_type, error_code, error_message)
             and attempt < OPENAI_RETRY_ATTEMPTS - 1
         )
         if should_retry:
             time.sleep(retry_delay_seconds(response, attempt))
             continue
 
+        if is_insufficient_quota(response.status_code, error_type, error_code, error_message):
+            raise OpenAIRequestError(
+                "OpenAI API quota exceeded (429). "
+                f"Model: {MODEL}. "
+                f"Type: {error_type or 'unknown'}. "
+                f"Code: {error_code or 'unknown'}. "
+                f"Details: {error_message or 'Too Many Requests'}",
+                status_code=response.status_code,
+                error_type=error_type,
+                error_code=error_code,
+            )
+
         if response.status_code == 429:
-            raise RuntimeError(
-                "OpenAI API rate limit or quota exceeded (429). "
-                f"Model: {MODEL}. Details: {error_message or 'Too Many Requests'}"
+            raise OpenAIRequestError(
+                "OpenAI API rate limit exceeded (429). "
+                f"Model: {MODEL}. "
+                f"Type: {error_type or 'unknown'}. "
+                f"Code: {error_code or 'unknown'}. "
+                f"Details: {error_message or 'Too Many Requests'}",
+                status_code=response.status_code,
+                error_type=error_type,
+                error_code=error_code,
             )
 
         response.raise_for_status()
@@ -328,11 +384,22 @@ def build_failure_review(error: Exception) -> str:
     ]
 
     lowered = error_text.lower()
-    if "429" in error_text or "rate limit" in lowered or "quota" in lowered:
+    if "quota exceeded" in lowered or "insufficient_quota" in lowered or "billing_hard_limit_reached" in lowered:
         suggestions = [
-            "- The request hit an OpenAI rate or quota limit; this is usually not caused by a missing repository secret.",
+            "- The request reached the OpenAI project quota limit; this is usually not caused by a missing repository secret.",
+            "- Add quota/billing to the project behind `OPENAI_API_KEY`, or switch to a project with available spend.",
+            "- Keep the configured model unchanged and retry after the project quota has been restored.",
+        ]
+        tests = [
+            "- Call the same model from the same API project outside GitHub Actions to confirm the quota error is reproducible.",
+            "- Verify the API project attached to `OPENAI_API_KEY` has active billing and remaining quota.",
+            "- Re-run the workflow after quota is restored.",
+        ]
+    elif "429" in error_text or "rate limit" in lowered:
+        suggestions = [
+            "- The request hit an OpenAI rate limit; the key may still be valid.",
             "- Retry after a short wait, or reduce the diff context and retry with the same comment trigger.",
-            "- Verify the project behind `OPENAI_API_KEY` has active billing/quota for the selected model.",
+            "- If this happens often, reduce prompt size or lower concurrent workflow runs for this repository.",
         ]
         tests = [
             "- Re-run the workflow after a short delay.",

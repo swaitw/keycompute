@@ -3,6 +3,7 @@
 简单的对话 Demo，使用 OpenAI 兼容格式的 API（流式响应）
 """
 
+import readline   # Unix/macOS 自带; Windows 需安装 pyreadline3
 from openai import OpenAI
 
 # 配置

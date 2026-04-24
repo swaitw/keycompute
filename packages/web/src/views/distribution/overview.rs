@@ -1,3 +1,4 @@
+use client_api::error::ClientError;
 use dioxus::prelude::*;
 
 use crate::hooks::use_i18n::use_i18n;
@@ -10,6 +11,28 @@ use crate::stores::{
     auth_store::AuthStore, public_settings_store::PublicSettingsStore, ui_store::UiStore,
 };
 use crate::utils::time::format_time;
+
+/// 复制文本到剪贴板（WASM 环境）
+fn copy_to_clipboard(text: &str) {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = web_sys::window().map(|w| {
+            let clipboard = w.navigator().clipboard();
+            clipboard.write_text(text)
+        });
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = text;
+    }
+}
+
+fn is_distribution_disabled_error<T>(result: &Option<Result<T, ClientError>>) -> bool {
+    matches!(
+        result,
+        Some(Err(ClientError::Forbidden(msg))) if msg.contains("Distribution is disabled")
+    )
+}
 
 #[component]
 pub fn DistributionOverview() -> Element {
@@ -55,6 +78,7 @@ pub fn DistributionOverview() -> Element {
 fn DistributionOverviewContent() -> Element {
     let i18n = use_i18n();
     let auth_store = use_context::<AuthStore>();
+    let mut ui_store = use_context::<UiStore>();
 
     // 收益数据
     let earnings = use_resource(move || async move {
@@ -106,6 +130,11 @@ fn DistributionOverviewContent() -> Element {
         Some(Ok(ref r)) => r.referral_link.clone(),
         _ => String::new(),
     };
+    let invite_link_text = invite_link.clone();
+    let copied_text = i18n.t("common.copied").to_string();
+    let distribution_disabled = is_distribution_disabled_error(&earnings())
+        || is_distribution_disabled_error(&referral_code())
+        || is_distribution_disabled_error(&referrals());
 
     rsx! {
         div {
@@ -116,100 +145,125 @@ fn DistributionOverviewContent() -> Element {
                 p { class: "page-subtitle", {i18n.t("distribution.subtitle")} }
             }
 
-            // 收益统计
-            div {
-                class: "stats-grid",
-                div { class: "stat-card card",
+            if distribution_disabled {
+                div { class: "card",
                     div { class: "card-body",
-                        p { class: "stat-label", {i18n.t("distribution.total_earnings")} }
-                        p { class: "stat-value", "{total_earnings}" }
-                    }
-                }
-                div { class: "stat-card card",
-                    div { class: "card-body",
-                        p { class: "stat-label", {i18n.t("distribution.available_balance")} }
-                        p { class: "stat-value", "{available_earnings}" }
-                    }
-                }
-                div { class: "stat-card card",
-                    div { class: "card-body",
-                        p { class: "stat-label", {i18n.t("distribution.pending")} }
-                        p { class: "stat-value", "{pending_earnings}" }
-                    }
-                }
-                div { class: "stat-card card",
-                    div { class: "card-body",
-                        p { class: "stat-label", {i18n.t("distribution.referral_count")} }
-                        p { class: "stat-value", "{referral_count}" }
-                    }
-                }
-            }
-
-            // 推荐码
-            div { class: "card",
-                div { class: "card-header",
-                    h3 { class: "card-title", {i18n.t("distribution.my_referral_code")} }
-                }
-                div { class: "card-body",
-                    div { class: "info-grid",
-                        div { class: "info-item",
-                            span { class: "info-label", {i18n.t("distribution.referral_code")} }
-                            span { class: "info-value",
-                                code { "{code_text}" }
-                            }
+                        div { class: "empty-state",
+                            div { class: "empty-icon", "⛔" }
+                            h3 { class: "empty-title", {i18n.t("distribution.disabled_title")} }
+                            p { class: "empty-text", {i18n.t("distribution.disabled_desc")} }
                         }
-                        if !invite_link.is_empty() {
+                    }
+                }
+            } else {
+                // 收益统计
+                div {
+                    class: "stats-grid",
+                    div { class: "stat-card card",
+                        div { class: "card-body",
+                            p { class: "stat-label", {i18n.t("distribution.total_earnings")} }
+                            p { class: "stat-value", "{total_earnings}" }
+                        }
+                    }
+                    div { class: "stat-card card",
+                        div { class: "card-body",
+                            p { class: "stat-label", {i18n.t("distribution.available_balance")} }
+                            p { class: "stat-value", "{available_earnings}" }
+                        }
+                    }
+                    div { class: "stat-card card",
+                        div { class: "card-body",
+                            p { class: "stat-label", {i18n.t("distribution.pending")} }
+                            p { class: "stat-value", "{pending_earnings}" }
+                        }
+                    }
+                    div { class: "stat-card card",
+                        div { class: "card-body",
+                            p { class: "stat-label", {i18n.t("distribution.referral_count")} }
+                            p { class: "stat-value", "{referral_count}" }
+                        }
+                    }
+                }
+
+                // 推荐码
+                div { class: "card",
+                    div { class: "card-header",
+                        h3 { class: "card-title", {i18n.t("distribution.my_referral_code")} }
+                    }
+                    div { class: "card-body",
+                        div { class: "info-grid",
                             div { class: "info-item",
-                                span { class: "info-label", {i18n.t("distribution.invite_link")} }
+                                span { class: "info-label", {i18n.t("distribution.referral_code")} }
                                 span { class: "info-value",
-                                    a { href: "{invite_link}", target: "_blank", "{invite_link}" }
+                                    code { "{code_text}" }
+                                }
+                            }
+                            if !invite_link.is_empty() {
+                                div { class: "info-item",
+                                    span { class: "info-label", {i18n.t("distribution.invite_link")} }
+                                    span { class: "info-value",
+                                        button {
+                                            class: "distribution-copy-value",
+                                            r#type: "button",
+                                            title: "{copied_text}",
+                                            onclick: {
+                                                let invite_link = invite_link_text.clone();
+                                                let copied_text = copied_text.clone();
+                                                move |_| {
+                                                    copy_to_clipboard(&invite_link);
+                                                    ui_store.show_success(copied_text.clone());
+                                                }
+                                            },
+                                            "{invite_link_text}"
+                                        }
+                                    }
                                 }
                             }
                         }
                     }
                 }
-            }
 
-            // 推荐列表
-            div { class: "card",
-                div { class: "card-header",
-                    h3 { class: "card-title", {i18n.t("distribution.referral_users")} }
-                }
-                div { class: "table-container",
-                    table { class: "table",
-                        thead {
-                            tr {
-                                th { {i18n.t("distribution.user")} }
-                                th { {i18n.t("distribution.joined_at")} }
-                                th { {i18n.t("distribution.total_spent")} }
-                                th { {i18n.t("distribution.my_earnings")} }
+                // 推荐列表
+                div { class: "card",
+                    div { class: "card-header",
+                        h3 { class: "card-title", {i18n.t("distribution.referral_users")} }
+                    }
+                    div { class: "table-container",
+                        table { class: "table",
+                            thead {
+                                tr {
+                                    th { {i18n.t("distribution.user")} }
+                                    th { {i18n.t("distribution.joined_at")} }
+                                    th { {i18n.t("distribution.total_spent")} }
+                                    th { {i18n.t("distribution.my_earnings")} }
+                                }
                             }
-                        }
-                        tbody {
-                            match referrals() {
-                                Some(Ok(ref list)) if !list.is_empty() => rsx! {
-                                    for r in list.iter() {
-                                        tr {
-                                            td {
-                                                div { class: "user-cell",
-                                                    span { class: "user-name",
-                                                        { r.name.clone().unwrap_or_else(|| r.email.clone()) }
+                            tbody {
+                                match referrals() {
+                                    Some(Ok(ref list)) if !list.is_empty() => rsx! {
+                                        for r in list.iter() {
+                                            tr {
+                                                td {
+                                                    div { class: "user-cell",
+                                                        span { class: "user-name",
+                                                            { r.name.clone().unwrap_or_else(|| r.email.clone()) }
+                                                        }
+                                                        span { class: "user-email", "{r.email}" }
                                                     }
-                                                    span { class: "user-email", "{r.email}" }
                                                 }
+                                                td { { format_time(&r.joined_at) } }
+                                                td { "¥{r.total_spent}" }
+                                                td { "¥{r.earnings_from_referral}" }
                                             }
-                                            td { { format_time(&r.joined_at) } }
-                                            td { "¥{r.total_spent}" }
-                                            td { "¥{r.earnings_from_referral}" }
                                         }
-                                    }
-                                },
-                                Some(Err(ref e)) => rsx! {
-                                    tr { td { colspan: "4", class: "table-empty", {user_error_message(e)} } }
-                                },
-                                _ => rsx! {
-                                    tr { td { colspan: "4", class: "table-empty", {i18n.t("distribution.no_referrals")} } }
-                                },
+                                    },
+                                    Some(Err(_)) => rsx! {
+                                        tr { td { colspan: "4", class: "table-empty", {i18n.t("common.load_failed")} } }
+                                    },
+                                    _ => rsx! {
+                                        tr { td { colspan: "4", class: "table-empty", {i18n.t("distribution.no_referrals")} } }
+                                    },
+                                }
                             }
                         }
                     }
