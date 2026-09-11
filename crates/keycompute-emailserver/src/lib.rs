@@ -8,8 +8,8 @@
 //! # 配置
 //!
 //! 通过 `keycompute-config` 模块加载配置：
-//! - 环境变量：`KC__EMAIL__SMTP_HOST`、`KC__EMAIL__SMTP_PORT` 等
-//! - 配置文件：`config.toml` 中的 `[email]` 部分
+//! - debug 开发启动：`config.toml` 中的 `[email]` 部分
+//! - release 生产启动：`KC__EMAIL__SMTP_HOST`、`KC__EMAIL__SMTP_PORT` 等环境变量
 //!
 //! # 热更新支持
 //!
@@ -81,6 +81,14 @@ enum TransportState {
 impl TransportState {
     fn is_ready(&self) -> bool {
         matches!(self, Self::Ready(_))
+    }
+
+    fn require_ready(&self) -> Result<&AsyncSmtpTransport<Tokio1Executor>, EmailError> {
+        match self {
+            Self::Ready(transport) => Ok(transport),
+            Self::Disabled => Err(EmailError::NotConfigured),
+            Self::InvalidConfig(msg) => Err(EmailError::InvalidConfig(msg.clone())),
+        }
     }
 }
 
@@ -217,6 +225,16 @@ impl EmailService {
         Self::new((*config).clone())
     }
 
+    /// 获取需求收集表单的接收人邮箱地址（来自配置）
+    pub async fn requirement_recipient(&self) -> Option<String> {
+        self.runtime
+            .read()
+            .await
+            .config
+            .requirement_recipient
+            .clone()
+    }
+
     /// 构建 SMTP 传输
     fn build_transport(config: &EmailConfig) -> TransportState {
         if !config.is_configured() {
@@ -229,11 +247,25 @@ impl EmailService {
         // lettre 0.11 的 pool 配置在启用 pool feature 后自动生效
         // 使用默认连接池配置（最大 10 个连接）
         let timeout = smtp_timeout(config.timeout_secs);
+
+        // 添加调试日志
+        tracing::info!(
+            host = %config.smtp_host,
+            port = config.smtp_port,
+            username = %config.smtp_username,
+            use_tls = config.use_tls,
+            "正在构建 SMTP 传输"
+        );
+
         let transport = match smtp_security_mode(config) {
             SmtpSecurityMode::StartTls => {
                 match AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(&config.smtp_host) {
                     Ok(builder) => builder
                         .credentials(creds)
+                        // 163 邮箱可能需要显式指定认证机制
+                        .authentication(vec![
+                            lettre::transport::smtp::authentication::Mechanism::Login,
+                        ])
                         .port(config.smtp_port)
                         .timeout(timeout)
                         .build(),
@@ -251,6 +283,10 @@ impl EmailService {
                 match AsyncSmtpTransport::<Tokio1Executor>::relay(&config.smtp_host) {
                     Ok(builder) => builder
                         .credentials(creds)
+                        // 163 邮箱可能需要显式指定认证机制
+                        .authentication(vec![
+                            lettre::transport::smtp::authentication::Mechanism::Login,
+                        ])
                         .port(config.smtp_port)
                         .timeout(timeout)
                         .build(),
@@ -443,6 +479,7 @@ KeyCompute 团队
         body: &str,
     ) -> Result<(), EmailError> {
         let runtime = self.runtime.read().await.clone();
+        let transport = runtime.transport.require_ready()?;
         let from_mailbox = Self::build_from_mailbox(&runtime.config)?;
 
         let to_mailbox: Mailbox = to
@@ -457,18 +494,10 @@ KeyCompute 团队
             .body(body.to_string())
             .map_err(|e| EmailError::BuildError(e.to_string()))?;
 
-        match &runtime.transport {
-            TransportState::Ready(transport) => {
-                transport
-                    .send(email)
-                    .await
-                    .map_err(|e| EmailError::SendError(e.to_string()))?;
-            }
-            TransportState::Disabled => return Err(EmailError::NotConfigured),
-            TransportState::InvalidConfig(msg) => {
-                return Err(EmailError::InvalidConfig(msg.clone()));
-            }
-        }
+        transport
+            .send(email)
+            .await
+            .map_err(|e| EmailError::SendError(e.to_string()))?;
 
         tracing::info!(
             to = %to,
@@ -500,6 +529,7 @@ KeyCompute 团队
         html_body: &str,
     ) -> Result<(), EmailError> {
         let runtime = self.runtime.read().await.clone();
+        let transport = runtime.transport.require_ready()?;
         let from_mailbox = Self::build_from_mailbox(&runtime.config)?;
 
         let to_mailbox: Mailbox = to
@@ -526,18 +556,10 @@ KeyCompute 团队
             )
             .map_err(|e| EmailError::BuildError(e.to_string()))?;
 
-        match &runtime.transport {
-            TransportState::Ready(transport) => {
-                transport
-                    .send(email)
-                    .await
-                    .map_err(|e| EmailError::SendError(e.to_string()))?;
-            }
-            TransportState::Disabled => return Err(EmailError::NotConfigured),
-            TransportState::InvalidConfig(msg) => {
-                return Err(EmailError::InvalidConfig(msg.clone()));
-            }
-        }
+        transport
+            .send(email)
+            .await
+            .map_err(|e| EmailError::SendError(e.to_string()))?;
 
         tracing::info!(
             to = %to,
@@ -546,6 +568,64 @@ KeyCompute 团队
         );
 
         Ok(())
+    }
+
+    /// 发送节点网关注册令牌邮件（管理员审批通过后通知用户）
+    ///
+    /// 邮件中包含完整的 token 明文，用户可使用该 token 注册节点。
+    /// 邮件发送失败不阻塞审批流程。
+    pub async fn send_node_gateway_token_email(
+        &self,
+        to: &str,
+        token_plaintext: &str,
+        token_preview: &str,
+    ) -> Result<(), EmailError> {
+        let subject = "您的节点网关注册令牌已审批通过";
+        let text_body = format!(
+            r#"您好！
+
+您的节点网关注册令牌已通过管理员审批。
+
+您的令牌（Token）：
+{token_plaintext}
+
+令牌预览：{token_preview}
+
+使用方式：
+在节点的配置文件中设置此令牌，即可完成节点注册。
+请注意：此令牌为一次性使用，注册后即失效。
+
+请妥善保管此令牌，切勿泄露给他人。
+
+祝好，
+KeyCompute 团队
+"#
+        );
+
+        let html_body = format!(
+            r#"<html>
+<body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
+<div style="max-width: 600px; margin: 0 auto; padding: 20px;">
+<h2 style="color: #2c5282;">节点网关注册令牌已审批通过</h2>
+<p>您好！</p>
+<p>您的节点网关注册令牌已通过管理员审批。</p>
+<div style="margin: 24px 0; padding: 16px; background: #f7fafc; border: 1px solid #e2e8f0; border-radius: 8px;">
+<p style="margin: 0 0 8px 0; color: #718096; font-size: 14px;">您的令牌（Token）：</p>
+<code style="display: block; padding: 12px; background: #edf2f7; border-radius: 4px; word-break: break-all; font-size: 14px; color: #2d3748;">{token_plaintext}</code>
+<p style="margin: 8px 0 0 0; color: #a0aec0; font-size: 12px;">令牌预览：{token_preview}</p>
+</div>
+<p>使用方式：在节点的配置文件中设置此令牌，即可完成节点注册。</p>
+<p style="color: #e53e3e; font-weight: bold;">请注意：此令牌为一次性使用，注册后即失效。</p>
+<p style="color: #e53e3e;">请妥善保管此令牌，切勿泄露给他人。</p>
+<hr style="border: none; border-top: 1px solid #e2e8f0; margin: 20px 0;">
+<p style="color: #718096; font-size: 12px;">KeyCompute 团队</p>
+</div>
+</body>
+</html>"#
+        );
+
+        self.send_html_email(to, subject, &text_body, &html_body)
+            .await
     }
 }
 
@@ -573,6 +653,7 @@ mod tests {
             from_name: Some("KeyCompute".to_string()),
             use_tls: true,
             timeout_secs: 30,
+            requirement_recipient: None,
         }
     }
 
@@ -613,11 +694,15 @@ mod tests {
     async fn test_send_without_config() {
         let service = EmailService::new(EmailConfig::default());
 
-        let result = service
+        let text_result = service
             .send_text_email("test@example.com", "Test", "Body")
             .await;
+        let html_result = service
+            .send_html_email("test@example.com", "Test", "Body", "<p>Body</p>")
+            .await;
 
-        assert!(matches!(result, Err(EmailError::NotConfigured)));
+        assert!(matches!(text_result, Err(EmailError::NotConfigured)));
+        assert!(matches!(html_result, Err(EmailError::NotConfigured)));
     }
 
     #[tokio::test]

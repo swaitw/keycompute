@@ -22,10 +22,10 @@ target
 
 **/__pycache__/
 test.py
+node-token/
 
 config.toml
-
-AGENTS.md
+plan.md
 agent.md
 CLAUDE.md
 .claude
@@ -37,3 +37,6 @@ CLAUDE.md
 .env.local
 .env.production
 config.toml
+sub2/
+new/
+cpa/

@@ -5,8 +5,8 @@
 use crate::{DistributionContext, DistributionLevel, calculator::DistributionShare};
 use chrono::{DateTime, Utc};
 use keycompute_db::CreateDistributionRecordRequest;
+use keycompute_db::DbRouter;
 use rust_decimal::Decimal;
-use sqlx::PgPool;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -82,14 +82,14 @@ impl DistributionRecord {
 /// 分销服务
 #[derive(Clone, Default)]
 pub struct DistributionService {
-    /// 数据库连接池（可选）
-    pool: Option<Arc<PgPool>>,
+    /// 数据库连接（可选）
+    pool: Option<Arc<DbRouter>>,
 }
 
 impl std::fmt::Debug for DistributionService {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("DistributionService")
-            .field("pool", &self.pool.as_ref().map(|_| "PgPool"))
+            .field("pool", &"DatabaseConnection")
             .finish()
     }
 }
@@ -101,7 +101,7 @@ impl DistributionService {
     }
 
     /// 创建带数据库连接的分销服务
-    pub fn with_pool(pool: Arc<PgPool>) -> Self {
+    pub fn with_pool(pool: Arc<DbRouter>) -> Self {
         Self { pool: Some(pool) }
     }
 
@@ -170,7 +170,7 @@ impl DistributionService {
         }
 
         // 使用批量插入保存所有记录（原子性）
-        match keycompute_db::DistributionRecord::create_many(pool, &requests).await {
+        match keycompute_db::DistributionRecord::create_many(pool.as_ref(), &requests).await {
             Ok(saved_records) => {
                 tracing::info!(
                     usage_log_id = %ctx.usage_log_id,

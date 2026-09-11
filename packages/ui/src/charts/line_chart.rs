@@ -1,9 +1,9 @@
 //! 折线图组件
 //!
-//! 基于 `charming` crate（ECharts WASM 渲染）封装的 Dioxus 折线图组件。
+//! 通过 JS 互调直接使用 ECharts 渲染折线图，无需 charming 中间层。
 //!
 //! # 示例
-//! ```rust
+//! ```rust,ignore
 //! LineChart {
 //!     id: "usage-chart",
 //!     title: "用量趋势",
@@ -16,13 +16,9 @@
 //! }
 //! ```
 
-use charming::{
-    Chart, WasmRenderer,
-    component::{Axis, Grid, Legend, Title},
-    element::AxisType,
-    series::Line,
-};
 use dioxus::prelude::*;
+#[cfg(target_arch = "wasm32")]
+use serde_json::json;
 
 /// 折线图单条数据系列
 #[derive(Clone, PartialEq)]
@@ -45,7 +41,7 @@ pub struct LineChartProps {
     pub x_data: Vec<String>,
     /// 数据系列列表
     pub series: Vec<LineSeriesData>,
-    /// 容器宽度（像素）
+    /// 容器最大宽度（像素）；实际宽度会随父容器收缩
     #[props(default = 500)]
     pub width: u32,
     /// 容器高度（像素）
@@ -55,9 +51,10 @@ pub struct LineChartProps {
 
 /// 折线图组件
 ///
-/// 基于 charming `WasmRenderer` 渲染 Apache ECharts 折线图。
+/// 通过 JS 互调直接调用 ECharts API 渲染折线图。
 /// 组件挂载后通过 `use_effect` 触发渲染，数据变更时自动重渲染。
 #[component]
+#[allow(unused_variables)]
 pub fn LineChart(props: LineChartProps) -> Element {
     let id = props.id.clone();
     let width = props.width;
@@ -66,41 +63,66 @@ pub fn LineChart(props: LineChartProps) -> Element {
     let x_data = props.x_data.clone();
     let series_data = props.series.clone();
 
+    let cleanup_id = props.id.clone();
+    use_drop(move || {
+        #[cfg(target_arch = "wasm32")]
+        {
+            crate::charts::echarts_bindgen::dispose_chart(&cleanup_id);
+        }
+    });
+
     use_effect(move || {
-        let mut chart = Chart::new().grid(Grid::new());
+        #[cfg(target_arch = "wasm32")]
+        {
+            let series_arr: Vec<serde_json::Value> = series_data
+                .iter()
+                .map(|s| {
+                    json!({
+                        "type": "line",
+                        "name": s.name,
+                        "data": s.data,
+                        "smooth": true
+                    })
+                })
+                .collect();
 
-        if !title_text.is_empty() {
-            chart = chart.title(Title::new().text(title_text.as_str()));
+            let mut option = json!({
+                "grid": { "containLabel": true },
+                "xAxis": { "type": "category", "data": x_data },
+                "yAxis": { "type": "value" },
+                "series": series_arr
+            });
+
+            if !title_text.is_empty() {
+                option["title"] = json!({ "text": title_text });
+            }
+            if series_data.len() > 1 {
+                option["legend"] = json!({ "bottom": 0 });
+            }
+
+            crate::charts::echarts_bindgen::render_chart(&id, width, height, &option);
+            crate::charts::echarts_bindgen::observe_chart_resize(&id, width, height);
         }
-
-        // 图例（多系列时显示）
-        if series_data.len() > 1 {
-            chart = chart.legend(Legend::new().top("bottom"));
-        }
-
-        // X 轴
-        let x_labels: Vec<&str> = x_data.iter().map(String::as_str).collect();
-        chart = chart.x_axis(Axis::new().type_(AxisType::Category).data(x_labels));
-
-        // Y 轴
-        chart = chart.y_axis(Axis::new().type_(AxisType::Value));
-
-        // 数据系列
-        for s in &series_data {
-            let values: Vec<charming::datatype::CompositeValue> =
-                s.data.iter().map(|&v| v.into()).collect();
-            let line = Line::new().name(s.name.as_str()).data(values);
-            chart = chart.series(line);
-        }
-
-        let renderer = WasmRenderer::new(width, height);
-        let _ = renderer.render(&id, &chart);
     });
 
     rsx! {
         div {
             id: "{props.id}",
-            style: "width: {width}px; height: {height}px;",
+            class: "responsive-chart",
+            style: "width: 100%; max-width: {width}px; height: {height}px;",
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn line_chart_uses_a_fluid_container() {
+        let source = include_str!("line_chart.rs");
+        let component_source = source.split("#[cfg(test)]").next().unwrap_or(source);
+        assert!(component_source.contains("width: 100%; max-width: {width}px"));
+        assert!(component_source.contains("observe_chart_resize(&id, width, height)"));
+        assert!(component_source.contains("dispose_chart(&cleanup_id)"));
+        assert!(!component_source.contains("style: \"width: {width}px; height: {height}px;\""));
     }
 }

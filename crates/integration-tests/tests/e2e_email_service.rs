@@ -286,6 +286,7 @@ fn test_email_service_config() {
         from_name: Some("KeyCompute".to_string()),
         use_tls: true,
         timeout_secs: 30,
+        requirement_recipient: None,
     };
 
     chain.add_step(
@@ -300,7 +301,7 @@ fn test_email_service_config() {
         "keycompute-emailserver",
         "EmailConfig::smtp_port",
         format!("SMTP端口: {}", config.smtp_port),
-        config.smtp_port == 587,
+        config.smtp_port == 465,
     );
     chain.add_step(
         "keycompute-emailserver",

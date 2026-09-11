@@ -33,6 +33,10 @@ pub enum KeyComputeError {
     #[error("routing failed: no available provider for model {0}")]
     RoutingFailed(String),
 
+    /// 无可用 Node 节点
+    #[error("no ready node available for model: {0}")]
+    NoReadyNode(String),
+
     // ============ Provider ============
     /// 上游 Provider 错误
     #[error("upstream provider error: {0}")]
@@ -41,6 +45,15 @@ pub enum KeyComputeError {
     /// Provider 超时
     #[error("provider timeout after {0}ms: {1}")]
     ProviderTimeout(u64, String),
+
+    /// Structured upstream failure preserved across protocol and gateway layers.
+    #[error("upstream failure {stable_code}: {summary}")]
+    UpstreamFailure {
+        status: Option<u16>,
+        stable_code: String,
+        retryable: bool,
+        summary: String,
+    },
 
     // ============ 数据库 ============
     /// 数据库操作错误
@@ -131,6 +144,12 @@ impl KeyComputeError {
                 | KeyComputeError::Timeout(_)
                 | KeyComputeError::ServiceUnavailable(_)
                 | KeyComputeError::DatabaseError(_)
+        ) || matches!(
+            self,
+            KeyComputeError::UpstreamFailure {
+                retryable: true,
+                ..
+            }
         )
     }
 
@@ -142,10 +161,12 @@ impl KeyComputeError {
             }
             KeyComputeError::VerificationError(_) => ErrorCategory::Verification,
             KeyComputeError::RateLimitExceeded(_) => ErrorCategory::RateLimit,
-            KeyComputeError::RoutingFailed(_) => ErrorCategory::Routing,
-            KeyComputeError::ProviderError(_) | KeyComputeError::ProviderTimeout(_, _) => {
-                ErrorCategory::Provider
+            KeyComputeError::RoutingFailed(_) | KeyComputeError::NoReadyNode(_) => {
+                ErrorCategory::Routing
             }
+            KeyComputeError::ProviderError(_)
+            | KeyComputeError::ProviderTimeout(_, _)
+            | KeyComputeError::UpstreamFailure { .. } => ErrorCategory::Provider,
             KeyComputeError::DatabaseError(_) => ErrorCategory::Database,
             KeyComputeError::ConfigError(_) => ErrorCategory::Config,
             KeyComputeError::ServiceUnavailable(_) => ErrorCategory::ServiceUnavailable,

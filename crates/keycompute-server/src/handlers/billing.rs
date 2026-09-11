@@ -73,7 +73,7 @@ pub async fn list_billing_records(
     Query(query): Query<ListBillingQuery>,
 ) -> Result<Json<BillingListResponse>> {
     // 检查数据库是否配置
-    let Some(pool) = &state.pool else {
+    let Some(pool) = state.pool.as_deref() else {
         return Err(crate::error::ApiError::Internal(
             "Database not configured".to_string(),
         ));
@@ -176,7 +176,7 @@ pub async fn get_billing_stats(
     Query(query): Query<BillingStatsQuery>,
 ) -> Result<Json<BillingStatsResponse>> {
     // 检查数据库是否配置
-    let Some(pool) = &state.pool else {
+    let Some(pool) = state.pool.as_deref() else {
         return Err(crate::error::ApiError::Internal(
             "Database not configured".to_string(),
         ));
@@ -265,9 +265,11 @@ pub async fn calculate_cost(
 ) -> Result<Json<CalculateCostResponse>> {
     // 使用默认租户 ID 创建价格快照
     let tenant_id = Uuid::nil();
+    // Node 模型（node:前缀）使用 empty provider
+    let provider = keycompute_pricing::resolve_pricing_provider(&request.model);
     let pricing = state
         .pricing
-        .create_snapshot(&request.model, &tenant_id, None)
+        .create_snapshot(&request.model, &tenant_id, Some(provider))
         .await
         .map_err(|e| crate::error::ApiError::Internal(format!("Failed to get pricing: {}", e)))?;
 

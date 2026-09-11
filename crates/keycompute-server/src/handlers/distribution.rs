@@ -22,8 +22,9 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 use uuid::Uuid;
 
-// 使用 sqlx::types::BigDecimal 替代 bigdecimal crate
-type BigDecimal = sqlx::types::BigDecimal;
+use sea_orm::ConnectionTrait;
+
+type BigDecimal = bigdecimal::BigDecimal;
 
 // ==================== 数据结构 ====================
 
@@ -218,7 +219,7 @@ pub async fn get_my_referral_code(
 ) -> Result<Json<ReferralCodeResponse>> {
     let pool = state
         .pool
-        .as_ref()
+        .as_deref()
         .ok_or_else(|| ApiError::Internal("Database not available".to_string()))?;
 
     // 检查分销系统是否启用
@@ -253,7 +254,7 @@ pub async fn generate_invite_link(
 ) -> Result<Json<InviteLinkResponse>> {
     let pool = state
         .pool
-        .as_ref()
+        .as_deref()
         .ok_or_else(|| ApiError::Internal("Database not available".to_string()))?;
 
     // 检查分销系统是否启用
@@ -305,7 +306,7 @@ fn string_to_bigdecimal(value: &str) -> Result<BigDecimal> {
 }
 
 /// 检查分销系统是否启用
-async fn check_distribution_enabled(pool: &sqlx::PgPool) -> Result<()> {
+async fn check_distribution_enabled(pool: &impl ConnectionTrait) -> Result<()> {
     let enabled =
         keycompute_db::SystemSetting::find_by_key(pool, setting_keys::DISTRIBUTION_ENABLED)
             .await
@@ -313,8 +314,9 @@ async fn check_distribution_enabled(pool: &sqlx::PgPool) -> Result<()> {
                 ApiError::Internal(format!("Failed to query distribution setting: {}", e))
             })?
             .map(|setting| setting.parse_bool())
-            // 与默认初始化保持一致：缺失设置时按启用处理，避免升级环境漏种默认值时误判为禁用。
-            .unwrap_or(true);
+            // Missing or invalid configuration must not expose distribution
+            // operations that depend on a configured public application URL.
+            .unwrap_or(false);
 
     if enabled {
         Ok(())
@@ -324,7 +326,7 @@ async fn check_distribution_enabled(pool: &sqlx::PgPool) -> Result<()> {
 }
 
 async fn build_distribution_record_response(
-    pool: &sqlx::PgPool,
+    pool: &impl ConnectionTrait,
     record: keycompute_db::DistributionRecord,
 ) -> Result<DistributionRecordResponse> {
     let usage_log = keycompute_db::UsageLog::find_by_id(pool, record.usage_log_id)
@@ -352,7 +354,7 @@ async fn build_distribution_record_response(
 }
 
 async fn build_referral_info(
-    pool: &sqlx::PgPool,
+    pool: &impl ConnectionTrait,
     beneficiary_id: Uuid,
     referral: keycompute_db::UserReferral,
 ) -> Result<ReferralInfo> {
@@ -402,7 +404,7 @@ pub async fn list_distribution_records(
 ) -> Result<Json<Vec<DistributionRecordResponse>>> {
     let pool = state
         .pool
-        .as_ref()
+        .as_deref()
         .ok_or_else(|| ApiError::Internal("Database not available".to_string()))?;
 
     let limit = query.limit.unwrap_or(20);
@@ -466,7 +468,7 @@ pub async fn get_distribution_stats(
 ) -> Result<Json<DistributionStatsResponse>> {
     let pool = state
         .pool
-        .as_ref()
+        .as_deref()
         .ok_or_else(|| ApiError::Internal("Database not available".to_string()))?;
 
     // 检查分销系统是否启用（普通用户）
@@ -515,7 +517,7 @@ pub async fn list_distribution_rules(
 
     let pool = state
         .pool
-        .as_ref()
+        .as_deref()
         .ok_or_else(|| ApiError::Internal("Database not available".to_string()))?;
 
     // 查询租户的所有规则
@@ -561,24 +563,29 @@ pub async fn create_distribution_rule(
 
     let pool = state
         .pool
-        .as_ref()
+        .as_deref()
         .ok_or_else(|| ApiError::Internal("Database not available".to_string()))?;
 
-    // 创建规则 - 使用当前用户作为受益人（简化处理）
-    let create_req = keycompute_db::CreateDistributionRuleRequest {
-        tenant_id: auth.tenant_id,
-        beneficiary_id: auth.user_id, // 使用当前用户作为受益人
-        name: req.name.clone(),
-        description: None,
-        commission_rate: string_to_bigdecimal(&req.commission_rate.to_string())?,
-        priority: Some(0),
-        effective_from: Some(chrono::Utc::now()),
-        effective_until: None,
-    };
-
-    let rule = keycompute_db::TenantDistributionRule::create(pool, &create_req)
-        .await
-        .map_err(|e| ApiError::Internal(format!("Failed to create rule: {}", e)))?;
+    // 全局规则使用 Uuid::nil() 表示对系统所有用户生效（租户级全局规则）
+    // 采用 upsert 语义：如已存在同租户的 priority=100 全局规则则更新（并重新激活），否则创建。
+    //
+    // 并发安全：upsert 在写库事务 + 租户级 advisory lock 内原子执行
+    //（见 TenantDistributionRule::upsert_global_override），消除并发请求下
+    // check-then-create/update 的 TOCTOU 重复创建问题，并在提交前校验
+    // priority=100 全局规则的唯一性；事务由 DbRouter 路由到写库，
+    // 不受读副本复制延迟影响。
+    let new_rate = string_to_bigdecimal(&req.commission_rate.to_string())?;
+    let rule = keycompute_db::TenantDistributionRule::upsert_global_override(
+        pool,
+        auth.tenant_id,
+        &req.name,
+        new_rate,
+    )
+    .await
+    .map_err(|e| {
+        tracing::error!(error = %e, tenant_id = %auth.tenant_id, "Failed to upsert distribution rule");
+        ApiError::Internal("Distribution rule operation failed".to_string())
+    })?;
 
     Ok(Json(DistributionRuleResponse {
         id: rule.id.to_string(),
@@ -616,7 +623,7 @@ pub async fn update_distribution_rule(
 
     let pool = state
         .pool
-        .as_ref()
+        .as_deref()
         .ok_or_else(|| ApiError::Internal("Database not available".to_string()))?;
 
     // 查找规则
@@ -672,7 +679,7 @@ pub async fn delete_distribution_rule(
 
     let pool = state
         .pool
-        .as_ref()
+        .as_deref()
         .ok_or_else(|| ApiError::Internal("Database not available".to_string()))?;
 
     // 查找并删除规则
@@ -702,7 +709,7 @@ pub async fn get_my_distribution_earnings(
 ) -> Result<Json<UserDistributionEarningsResponse>> {
     let pool = state
         .pool
-        .as_ref()
+        .as_deref()
         .ok_or_else(|| ApiError::Internal("Database not available".to_string()))?;
 
     // 检查分销系统是否启用
@@ -738,7 +745,7 @@ pub async fn get_my_referrals(
 ) -> Result<Json<Vec<ReferralInfo>>> {
     let pool = state
         .pool
-        .as_ref()
+        .as_deref()
         .ok_or_else(|| ApiError::Internal("Database not available".to_string()))?;
 
     // 检查分销系统是否启用

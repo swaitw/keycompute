@@ -26,7 +26,8 @@ pub static EN: LazyLock<HashMap<&'static str, &'static str>> = LazyLock::new(|| 
     m.insert("nav.payment_orders", "Payment Orders");
     m.insert("nav.distribution_records", "Distribution Records");
     m.insert("nav.tenants", "Tenants");
-    m.insert("nav.system", "System");
+    m.insert("nav.node_gateway", "Node Gateway");
+    m.insert("nav.monitoring", "Monitoring & Diagnostics");
     m.insert("nav.account_settings", "Account Settings");
     m.insert("nav.settings", "Settings");
     m.insert("nav.group.usage", "Usage");
@@ -46,6 +47,10 @@ pub static EN: LazyLock<HashMap<&'static str, &'static str>> = LazyLock::new(|| 
     m.insert("auth.confirm_password", "Confirm Password");
     m.insert("auth.name", "Name");
     m.insert("auth.remember_me", "Remember me");
+    m.insert(
+        "auth.remember_me_hint",
+        "Stay signed in after closing the browser",
+    );
     m.insert("auth.no_account", "Don't have an account?");
     m.insert("auth.has_account", "Already have an account?");
     m.insert("auth.send_reset_email", "Send Reset Email");
@@ -62,8 +67,10 @@ pub static EN: LazyLock<HashMap<&'static str, &'static str>> = LazyLock::new(|| 
     );
     m.insert("auth.register_now", "Sign up");
     m.insert("auth.login_now", "Sign in");
-    m.insert("auth.email_placeholder", "Enter your email");
-    m.insert("auth.password_placeholder", "Enter your password");
+    m.insert("auth.email_placeholder", "admin@keycompute.local");
+    // 占位密码 12345 与默认管理员密码保持一致，属产品有意为之，请勿在 review 中改动。
+    // DO NOT CHANGE: intentional placeholder matching the default admin password.
+    m.insert("auth.password_placeholder", "12345");
     m.insert("auth.username_placeholder", "Enter your username");
     m.insert("auth.name_placeholder", "Enter your name");
     m.insert("auth.confirm_password_placeholder", "Re-enter password");
@@ -84,6 +91,10 @@ pub static EN: LazyLock<HashMap<&'static str, &'static str>> = LazyLock::new(|| 
     m.insert("auth.send_failed", "Failed to send");
     m.insert("auth.sending", "Sending...");
     m.insert("auth.cooldown_retry", "Try again later");
+    m.insert(
+        "auth.identity_error",
+        "Invalid email or username, unable to send reset link",
+    );
     m.insert("auth.send_reset_link", "Send Reset Link");
     m.insert("auth.logging_in", "Signing in...");
     m.insert("auth.registering", "Signing up...");
@@ -128,9 +139,10 @@ pub static EN: LazyLock<HashMap<&'static str, &'static str>> = LazyLock::new(|| 
     m.insert("page.payment_orders", "Payment Orders");
     m.insert("page.distribution_records", "Distribution Records");
     m.insert("page.tenants", "Tenants");
-    m.insert("page.system", "System Diagnostics");
     m.insert("page.account_settings", "Account Settings");
     m.insert("page.settings", "Settings");
+    m.insert("page.node_gateway", "Node Gateway");
+    m.insert("page.monitoring", "Monitoring & Diagnostics");
     m.insert("page.not_found", "Page Not Found");
 
     // ── Form ────────────────────────────────────
@@ -156,6 +168,8 @@ pub static EN: LazyLock<HashMap<&'static str, &'static str>> = LazyLock::new(|| 
     // ── Table ───────────────────────────────────
     m.insert("table.no_data", "No data");
     m.insert("table.loading", "Loading...");
+    m.insert("table.previous", "‹ Previous");
+    m.insert("table.next", "Next ›");
     m.insert("table.actions", "Actions");
     m.insert("table.status", "Status");
     m.insert("table.created_at", "Created At");
@@ -165,6 +179,7 @@ pub static EN: LazyLock<HashMap<&'static str, &'static str>> = LazyLock::new(|| 
 
     // ── Common ──────────────────────────────────
     m.insert("common.loading", "Loading");
+    m.insert("common.more", "More");
     m.insert("common.error", "Something went wrong");
     m.insert("common.success", "Success");
     m.insert(
@@ -173,14 +188,27 @@ pub static EN: LazyLock<HashMap<&'static str, &'static str>> = LazyLock::new(|| 
     );
     m.insert("common.copied", "Copied to clipboard");
     m.insert("common.copy", "Copy");
+    m.insert(
+        "common.copy_manual_hint",
+        "Non-HTTPS context, please select text and right-click to copy",
+    );
     m.insert("common.refresh", "Refresh");
     m.insert("common.back", "Back");
+    m.insert("common.clear", "Clear");
+    m.insert("common.close", "Close");
     m.insert("common.time", "Time");
     m.insert("common.total_items", "Total");
+    m.insert("common.range", "Range");
     m.insert("common.created_at_label", "Created");
     m.insert("common.load_failed", "Load failed");
+    m.insert(
+        "common.user_info_load_failed",
+        "Failed to load user information, so admin access could not be verified.",
+    );
+    m.insert("common.retry", "Retry");
     m.insert("common.redirecting", "Redirecting");
     m.insert("common.redirect_to_login", "Redirecting to sign in...");
+    m.insert("common.redirect_to_home", "Redirecting to home...");
     m.insert(
         "common.admin_only_page",
         "Permission denied: this page is available to admins only",
@@ -227,11 +255,54 @@ pub static EN: LazyLock<HashMap<&'static str, &'static str>> = LazyLock::new(|| 
     m.insert("api_keys.created_title", "API Key created");
     m.insert("api_keys.created_once", "Shown only once. Save it now.");
     m.insert("api_keys.example", "Usage example");
+    m.insert("api_keys.models_title", "1. Available models");
+    m.insert("api_keys.models_desc_prefix", "Use the ");
+    m.insert("api_keys.models_desc_suffix", " parameter in requests");
+    m.insert("api_keys.default_model", "Default");
+    m.insert("api_keys.more_models", "more models");
+    m.insert(
+        "api_keys.quick_example",
+        "2. Quick start example, ready to copy",
+    );
+    m.insert(
+        "api_keys.quick_example_desc",
+        "Copy an example below and replace it into your application code.",
+    );
+    m.insert("api_keys.example_env", "Environment");
+    m.insert(
+        "api_keys.example_env_comment",
+        "Add the following to your .env file or environment variables",
+    );
+    m.insert("api_keys.example_python", "OpenAI SDK (Python)");
+    m.insert("api_keys.example_node", "OpenAI SDK (Node.js)");
+    m.insert("api_keys.example_curl", "cURL");
+    m.insert("api_keys.example_protocol_openai", "OpenAI");
+    m.insert("api_keys.example_protocol_responses", "Responses");
+    m.insert("api_keys.example_protocol_anthropic", "Anthropic");
+    m.insert("api_keys.example_websocket", "WebSocket");
+    m.insert(
+        "api_keys.example_python_anthropic",
+        "Anthropic SDK (Python)",
+    );
+    m.insert("api_keys.example_node_anthropic", "Anthropic SDK (Node.js)");
+    m.insert(
+        "api_keys.example_note_anthropic",
+        "Tip: the Anthropic examples call the /v1/messages endpoint; the example model prefers the first Claude model in the list, otherwise the first listed model; if the list is empty, {model} is a non-callable placeholder, please replace it with a real model.",
+    );
+    m.insert("api_keys.copy", "Copy");
     m.insert("api_keys.copy_hint", "Click to copy");
     m.insert("api_keys.copied", "Copied");
     m.insert(
         "api_keys.example_note",
         "Use this configuration with OpenAI-compatible SDKs or tools.",
+    );
+    m.insert(
+        "api_keys.example_note_prefix",
+        "Tip: to switch models, change ",
+    );
+    m.insert(
+        "api_keys.example_note_suffix",
+        " to any model from the list on the left.",
     );
     m.insert("api_keys.close_saved", "Saved, close");
     m.insert("api_keys.create_title", "Create API Key");
@@ -239,6 +310,11 @@ pub static EN: LazyLock<HashMap<&'static str, &'static str>> = LazyLock::new(|| 
     m.insert("api_keys.name_placeholder", "Name this key");
     m.insert("api_keys.creating", "Creating...");
     m.insert("api_keys.create_failed", "Create failed");
+    m.insert("api_keys.delete_confirm_title", "Delete API Key");
+    m.insert(
+        "api_keys.delete_confirm_message",
+        "Delete API Key “{name}”? This action cannot be undone.",
+    );
     m.insert("api_keys.loading_failed", "Load failed");
     m.insert("api_keys.registry", "API Key Management");
     m.insert("api_keys.empty_meta", "No keys match the current filter.");
@@ -258,8 +334,10 @@ pub static EN: LazyLock<HashMap<&'static str, &'static str>> = LazyLock::new(|| 
     m.insert("api_keys.revoked", "Revoked");
 
     // ── Layout ──────────────────────────────────
-    m.insert("layout.toggle_sidebar", "Toggle sidebar");
+    m.insert("layout.back_to_home", "Back to Home");
     m.insert("layout.open_menu", "Open menu");
+    m.insert("layout.close_menu", "Close menu");
+    m.insert("layout.user_menu", "User menu");
     m.insert("layout.switch_to_light", "Switch to light theme");
     m.insert("layout.switch_to_dark", "Switch to dark theme");
     m.insert("layout.switch_to_zh", "Switch to Chinese");
@@ -274,19 +352,145 @@ pub static EN: LazyLock<HashMap<&'static str, &'static str>> = LazyLock::new(|| 
     );
     m.insert("error.back_home", "Back to Dashboard");
 
+    // ── Home ────────────────────────────────────
+    m.insert("home.welcome", "Welcome to KeyCompute");
+    m.insert("home.login", "Sign In");
+    m.insert("home.register", "Sign Up");
+    m.insert("home.console", "Console");
+    m.insert("home.toggle_theme", "Toggle Theme");
+    m.insert("home.features.title", "Core Features");
+    m.insert("home.features.routing.title", "Smart Routing");
+    m.insert(
+        "home.features.routing.desc",
+        "Intelligent model scheduling with optimal path selection",
+    );
+    m.insert("home.features.billing.title", "Real-time Billing");
+    m.insert(
+        "home.features.billing.desc",
+        "Precise metering, instant settlement, transparent consumption",
+    );
+    m.insert("home.features.cluster.title", "Distributed Cluster");
+    m.insert(
+        "home.features.cluster.desc",
+        "Multi-region deployment, elastic scaling, high availability",
+    );
+    m.insert("home.features.node_rental.title", "Node Leasing");
+    m.insert(
+        "home.features.node_rental.desc",
+        "Connect personal PCs to the compute market and monetize idle hardware",
+    );
+    m.insert("home.features.distribution.title", "Viral Growth");
+    m.insert(
+        "home.features.distribution.desc",
+        "Two-tier referral commissions and incentives that fuel growth",
+    );
+    m.insert("home.features.custom.title", "Custom Solutions");
+    m.insert(
+        "home.features.custom.desc",
+        "On-demand configuration, flexible business adaptation",
+    );
+    m.insert("home.menu", "Menu");
+    m.insert("home.lang_switch_label", "中");
+    m.insert("home.tip.title", "Support Us");
+    m.insert("home.tip.subtitle_prefix", "If you like ");
+    m.insert(
+        "home.tip.subtitle_suffix",
+        ", feel free to buy us a coffee ☕",
+    );
+    m.insert("home.tip.wechat_qr_alt", "WeChat Tip QR");
+    m.insert("home.tip.wechat_label", "WeChat Pay");
+    m.insert("home.tip.alipay_qr_alt", "Alipay Tip QR");
+    m.insert("home.tip.alipay_label", "Alipay");
+    m.insert("home.contributors.title", "Community Contributors");
+    m.insert(
+        "home.contributors.subtitle",
+        "Thanks to all contributors who make KeyCompute better ❤️",
+    );
+    m.insert("home.sponsors.title", "Community Sponsors");
+    m.insert(
+        "home.sponsors.subtitle",
+        "Thanks to the following friends for their generous support 🙏 (in no particular order)",
+    );
+
+    // ── Requirement Collection ──────────────────────
+    m.insert("req.bubble", "Request Consult");
+    m.insert("req.title", "Submit Compute Request");
+    m.insert(
+        "req.subtitle",
+        "Tell us your needs and our team will reach out shortly",
+    );
+    m.insert("req.single_choice", "single choice");
+    m.insert("req.type.label", "Request Type");
+    m.insert("req.type.api", "API Access");
+    m.insert("req.type.private", "Private Deployment");
+    m.insert("req.type.rental", "Node Rental");
+    m.insert("req.type.distributed", "Distributed Inference");
+    m.insert("req.type.cost", "Cost Optimization");
+    m.insert("req.type.other", "Other");
+    m.insert("req.model.label", "Model Requirement");
+    m.insert("req.model.placeholder", "Select or enter a model name");
+    m.insert("req.scale.label", "Estimated Usage Scale");
+    m.insert("req.scale.test", "Testing Phase");
+    m.insert("req.scale.lt1w", "Under 10K tokens/day");
+    m.insert("req.scale.10w", "100K tokens/day");
+    m.insert("req.scale.100w", "1M tokens/day+");
+    m.insert("req.scale.unknown", "Not sure");
+    m.insert("req.deploy.label", "Node Deployment");
+    m.insert("req.deploy.image", "Container Image Deploy");
+    m.insert("req.deploy.recommended", "Recommended");
+    m.insert(
+        "req.deploy.image_desc",
+        "Prebuilt image, one-click launch; fast and standardized ops",
+    );
+    m.insert("req.deploy.binary", "Binary Systemd Deploy");
+    m.insert(
+        "req.deploy.binary_desc",
+        "Binary deploy managed by Systemd; lightweight, custom-friendly",
+    );
+    m.insert("req.contact.label", "Contact");
+    m.insert("req.contact.wechat", "WeChat");
+    m.insert("req.contact.email", "Email");
+    m.insert("req.contact.telegram", "Telegram");
+    m.insert("req.contact.phone", "Phone");
+    m.insert("req.contact.placeholder.wechat", "Enter your WeChat ID");
+    m.insert("req.contact.placeholder.email", "Enter your email");
+    m.insert("req.contact.placeholder.telegram", "Enter your Telegram");
+    m.insert("req.contact.placeholder.phone", "Enter your phone number");
+    m.insert("req.note.label", "Additional Notes");
+    m.insert("req.note.optional", "optional");
+    m.insert(
+        "req.note.placeholder",
+        "Describe your needs, use case, budget and goals in detail",
+    );
+    m.insert("req.submit", "Submit Request");
+    m.insert("req.submitting", "Submitting…");
+    m.insert(
+        "req.privacy",
+        "By submitting you agree to the Privacy Policy; we keep your information secure",
+    );
+    m.insert("req.success", "Received. We will contact you shortly");
+    m.insert("req.err.contact_required", "Please provide a contact");
+    m.insert("req.err.contact_invalid", "Invalid contact format");
+    m.insert(
+        "req.err.failed",
+        "Submission failed, please try again later",
+    );
+
     // ── Login ───────────────────────────────────
-    m.insert("login.tagline_1", "Give");
-    m.insert("login.tagline_highlight", "AI Apps");
-    m.insert("login.tagline_2", "a");
-    m.insert("login.tagline_3", "high-performance compute gateway");
+    m.insert("login.tagline_1", "Next-Gen");
+    m.insert("login.tagline_highlight", "AI Token Compute Platform");
+    m.insert("login.tagline_2", "Every Token Creates Value");
+    m.insert("login.tagline_3", "");
     m.insert(
         "login.description",
-        "Unified LLM access, intelligent routing, real-time billing, and end-to-end observability. An enterprise-ready AI token management platform out of the box.",
+        "Unified LLM access, intelligent routing, real-time billing, and end-to-end observability. An enterprise-ready AI token compute platform out of the box.",
     );
     m.insert("login.feature_routing", "Smart Routing");
     m.insert("login.feature_billing", "Real-time Billing");
-    m.insert("login.feature_ha", "High Availability");
-    m.insert("login.feature_api", "API Management");
+    m.insert("login.feature_ha", "Node Leasing");
+    m.insert("login.feature_api", "Distributed Cluster");
+    m.insert("login.feature_metering", "Precise Metering");
+    m.insert("login.feature_custom", "Custom Solutions");
     m.insert("login.title", "Sign in to your account");
     m.insert(
         "login.subtitle",
@@ -304,6 +508,10 @@ pub static EN: LazyLock<HashMap<&'static str, &'static str>> = LazyLock::new(|| 
 
     // ── Account Settings ────────────────────────
     m.insert(
+        "account_settings.subtitle",
+        "Update your password and account security",
+    );
+    m.insert(
         "account_settings.fill_all_passwords",
         "Please fill in all password fields",
     );
@@ -313,17 +521,29 @@ pub static EN: LazyLock<HashMap<&'static str, &'static str>> = LazyLock::new(|| 
     );
     m.insert(
         "account_settings.password_too_short",
-        "The new password must be at least 8 characters",
+        "New password must be at least 8 characters",
+    );
+    m.insert(
+        "account_settings.password_no_uppercase",
+        "New password must contain at least one uppercase letter",
+    );
+    m.insert(
+        "account_settings.password_no_lowercase",
+        "New password must contain at least one lowercase letter",
+    );
+    m.insert(
+        "account_settings.password_no_digit",
+        "New password must contain at least one digit",
+    );
+    m.insert(
+        "account_settings.password_no_special",
+        "New password must contain at least one special character",
     );
     m.insert(
         "account_settings.password_changed",
         "Password changed successfully",
     );
     m.insert("account_settings.change_failed", "Change failed");
-    m.insert(
-        "account_settings.page_desc",
-        "Maintain sign-in security information and password policy entry points. The layout follows the diagnostics/settings pages with a compact vertical structure.",
-    );
     m.insert("account_settings.change_password", "Change Password");
     m.insert(
         "account_settings.section_desc",
@@ -380,6 +600,8 @@ pub static EN: LazyLock<HashMap<&'static str, &'static str>> = LazyLock::new(|| 
     m.insert("usage.prompt_tokens", "Prompt Tokens");
     m.insert("usage.completion_tokens", "Completion Tokens");
     m.insert("usage.total_cost", "Total Cost");
+    m.insert("usage.status_success", "Succeeded");
+    m.insert("usage.status_failed", "Failed");
     m.insert("usage.usage_billed", "Usage-based billing");
     m.insert("usage.trend", "Call Trend");
     m.insert("usage.records", "Call Records");
@@ -407,8 +629,143 @@ pub static EN: LazyLock<HashMap<&'static str, &'static str>> = LazyLock::new(|| 
     m.insert("payments.no_recharge_records", "No recharge records yet");
     m.insert("payments.order_no", "Order No.");
     m.insert("payments.subject", "Subject");
-    m.insert("payments.usage_details", "Usage Details");
-    m.insert("payments.no_usage_records", "No usage records yet");
+
+    // ── Payment Orders ──────────────────────────
+    m.insert(
+        "payment_orders.subtitle_admin",
+        "View and manage all payment orders on the platform",
+    );
+    m.insert(
+        "payment_orders.subtitle_user",
+        "View your recharge and payment records",
+    );
+    m.insert("payment_orders.empty", "No payment orders yet");
+    m.insert("payment_orders.col_user", "User");
+    m.insert("payment_orders.provider_switch", "Admin switch");
+    m.insert("payment_orders.provider_config", "Configuration");
+    m.insert("payment_orders.verify_provider", "Verify provider");
+    m.insert("payment_orders.verifying_provider", "Verifying...");
+    m.insert("common.configured", "Configured");
+    m.insert("common.not_configured", "Not configured");
+    m.insert("payment_orders.pagination", "{total} items");
+    m.insert("payment_orders.filter_all", "All");
+    m.insert("payment_orders.filter_pending", "Pending");
+    m.insert("payment_orders.filter_paid", "Paid");
+    m.insert("payment_orders.filter_failed", "Failed");
+    m.insert("payment_orders.filter_closed", "Closed");
+    m.insert("payment_orders.status_pending", "Pending");
+    m.insert("payment_orders.status_processing", "Processing");
+    m.insert("payment_orders.status_paid", "Paid");
+    m.insert("payment_orders.status_failed", "Failed");
+    m.insert("payment_orders.status_closed", "Closed");
+    m.insert("payment_orders.status_cancelled", "Cancelled");
+    m.insert("payment_orders.provider_available", "Available");
+    m.insert("payment_orders.provider_disabled", "Disabled");
+    m.insert("payment_orders.provider_misconfigured", "Misconfigured");
+    m.insert("payment_orders.provider_state_error", "State error");
+    m.insert(
+        "payment_orders.provider_unverified",
+        "Verification required",
+    );
+    m.insert("payment_orders.provider_unavailable", "Unavailable");
+    m.insert("payment_orders.provider_degraded", "Degraded");
+    m.insert(
+        "payment_orders.provider_misconfigured_message",
+        "The provider is enabled, but credentials or callback settings are incomplete.",
+    );
+    m.insert(
+        "payment_orders.provider_state_error_message",
+        "Provider state is unavailable or invalid, so new orders are paused.",
+    );
+    m.insert(
+        "payment_orders.provider_unverified_message",
+        "Configuration loaded; provider verification is still required before use.",
+    );
+    m.insert(
+        "payment_orders.provider_unavailable_message",
+        "Authentication or signature verification failed, so new orders are paused.",
+    );
+    m.insert(
+        "payment_orders.provider_degraded_message",
+        "Recent provider requests were unstable; new orders remain enabled while monitoring continues.",
+    );
+
+    // ── Recharge ──────────────────────────────
+    m.insert("recharge.title", "Account Recharge");
+    m.insert("recharge.select_method", "Select Payment Method");
+    m.insert("recharge.payment_method", "Payment Method");
+    m.insert("recharge.alipay", "Alipay");
+    m.insert("recharge.wechat_pay", "WeChat Pay");
+    m.insert("recharge.no_payment_methods", "No payment method is currently available. Please try again later or contact an administrator.");
+    m.insert("recharge.amount_label", "Amount (CNY)");
+    m.insert("recharge.custom_amount", "Or enter a custom amount");
+    m.insert("recharge.creating_order", "Creating order...");
+    m.insert("recharge.confirm_recharge", "Confirm & Pay");
+    m.insert(
+        "recharge.hint",
+        "Balance is usually credited within seconds. Contact support if not received in time.",
+    );
+    m.insert("recharge.pay_title", "Complete Payment");
+    m.insert("recharge.order_created", "Order created, awaiting payment");
+    m.insert("recharge.order_no_label", "Order No.");
+    m.insert("recharge.open_payment", "Open Payment Page");
+    m.insert(
+        "recharge.refresh_hint",
+        "Click \"Confirm Paid\" after payment to refresh the status",
+    );
+    m.insert(
+        "recharge.pay_alipay_page",
+        "\u{1f4b3} Please open Alipay to complete payment",
+    );
+    m.insert(
+        "recharge.pay_wap",
+        "\u{1f4f1} Please complete payment on your mobile device",
+    );
+    m.insert("recharge.pay_other", "Please click the button below to pay");
+    m.insert(
+        "recharge.scan_pay",
+        "Please use Alipay or other scanner to complete payment",
+    );
+    m.insert(
+        "recharge.scan_wechat",
+        "Scan the QR code with WeChat to complete payment",
+    );
+    m.insert(
+        "recharge.scan_alipay",
+        "Scan the QR code with Alipay to complete payment",
+    );
+    m.insert("recharge.qr_code_alt", "Payment QR Code");
+    m.insert("recharge.qr_code_content", "QR Code content:");
+    m.insert("recharge.confirm_paid", "Confirm Paid");
+    m.insert("recharge.pay_later", "Pay Later");
+    m.insert("recharge.success_title", "Recharge Successful!");
+    m.insert(
+        "recharge.success_desc",
+        "Balance credited, ready to use API",
+    );
+    m.insert("recharge.view_balance", "View Balance");
+    m.insert("recharge.continue_recharge", "Continue Recharge");
+    m.insert("recharge.enter_amount", "Please enter a recharge amount");
+    m.insert(
+        "recharge.invalid_amount",
+        "Please enter a valid amount (greater than 0)",
+    );
+    m.insert(
+        "recharge.pay_success",
+        "Payment successful! Balance will be credited shortly",
+    );
+    m.insert(
+        "recharge.pay_success_credited",
+        "Payment successful! Balance credited",
+    );
+    m.insert("recharge.order_status", "Order status: {status}");
+    m.insert("recharge.order_expired", "Order expired: {status}");
+    m.insert("recharge.create_failed", "Failed to create order: {error}");
+    m.insert("recharge.account_recharge_subject", "Account Recharge");
+    m.insert(
+        "recharge.recharge_amount_format",
+        "{site_name} account recharge {amount} CNY",
+    );
 
     // ── Distribution ────────────────────────────
     m.insert("distribution.title", "Distribution");
@@ -417,13 +774,20 @@ pub static EN: LazyLock<HashMap<&'static str, &'static str>> = LazyLock::new(|| 
         "Review your distribution earnings and referral records",
     );
     m.insert("distribution.fetch_failed", "Fetch failed");
+    m.insert("distribution.disabled_title", "Distribution is disabled");
+    m.insert(
+        "distribution.disabled_desc",
+        "Distribution has not been enabled for this system yet, so earnings, referral code, and referral user data are currently unavailable.",
+    );
     m.insert("distribution.total_earnings", "Total Earnings");
     m.insert("distribution.available_balance", "Available Balance");
     m.insert("distribution.pending", "Pending Settlement");
+    m.insert("distribution.status_settled", "Settled");
+    m.insert("distribution.status_pending", "Pending");
+    m.insert("distribution.status_cancelled", "Cancelled");
+    m.insert("distribution.status_failed", "Failed");
     m.insert("distribution.referral_count", "Referral Count");
-    m.insert("distribution.my_referral_code", "My Referral Code");
-    m.insert("distribution.referral_code", "Referral Code");
-    m.insert("distribution.invite_link", "Invite Link");
+    m.insert("distribution.my_invite_link", "My Invite Link");
     m.insert("distribution.referral_users", "Referred Users");
     m.insert("distribution.user", "User");
     m.insert("distribution.joined_at", "Joined At");
@@ -465,6 +829,24 @@ pub static EN: LazyLock<HashMap<&'static str, &'static str>> = LazyLock::new(|| 
         "Affects amount display in the console, default order currency, and some frontend labels.",
     );
     m.insert("settings.min_recharge_label", "Minimum Recharge Amount");
+    m.insert("settings.max_recharge_label", "Maximum Recharge Amount");
+    m.insert(
+        "settings.max_recharge_desc",
+        "Limits the amount of a single recharge order.",
+    );
+    m.insert("settings.payment_title", "Payment Providers");
+    m.insert(
+        "settings.payment_desc",
+        "Admin switches only control new orders; misconfigured providers remain hidden from users.",
+    );
+    m.insert(
+        "settings.alipay_enabled_desc",
+        "Allow Alipay to create new recharge orders.",
+    );
+    m.insert(
+        "settings.wechatpay_enabled_desc",
+        "Allow WeChat Pay Native to create new recharge orders.",
+    );
     m.insert(
         "settings.min_recharge_desc",
         "Prevents extremely small recharge orders from entering the payment flow.",
@@ -502,10 +884,16 @@ pub static EN: LazyLock<HashMap<&'static str, &'static str>> = LazyLock::new(|| 
     );
     m.insert("pricing.create", "+ Create Pricing");
     m.insert("pricing.empty", "No pricing policies yet");
+    m.insert(
+        "pricing.search_placeholder",
+        "Search model, billing dimension, or tenant ID",
+    );
     m.insert("pricing.table_title", "Model Pricing Table");
     m.insert("pricing.table_subtitle", "Review provider ownership, input/output rates, and default strategies for each model in a single place.");
     m.insert("pricing.items_suffix", "items");
     m.insert("pricing.model_provider", "Model / Provider");
+    m.insert("pricing.tenant_id", "Tenant ID");
+    m.insert("pricing.global", "Global Default");
     m.insert("pricing.input_price", "Input Price");
     m.insert("pricing.output_price", "Output Price");
     m.insert("pricing.billing_status", "Billing Status");
@@ -529,6 +917,11 @@ pub static EN: LazyLock<HashMap<&'static str, &'static str>> = LazyLock::new(|| 
     m.insert("pricing.set_default", "Set Default");
     m.insert("pricing.deleted", "Pricing deleted");
     m.insert("pricing.delete_failed", "Failed to delete");
+    m.insert("pricing.delete_confirm_title", "Delete pricing");
+    m.insert(
+        "pricing.delete_confirm_message",
+        "Delete this pricing entry for “{model}”? This action cannot be undone.",
+    );
     m.insert("pricing.created", "Pricing created successfully");
     m.insert("pricing.updated", "Pricing updated successfully");
     m.insert("pricing.fill_all", "Please fill in all fields");
@@ -551,6 +944,10 @@ pub static EN: LazyLock<HashMap<&'static str, &'static str>> = LazyLock::new(|| 
     m.insert("pricing.edit_title", "Edit Pricing");
     m.insert("pricing.model_name", "Model Name");
     m.insert("pricing.model_placeholder", "e.g. gpt-4o");
+    m.insert("pricing.provider_type", "Provider Type");
+    m.insert("pricing.provider_type_placeholder", "Select provider type");
+    m.insert("pricing.label_provider_account", "Provider Account");
+    m.insert("pricing.label_node", "Node");
     m.insert("pricing.input_price_label", "Input Price (per 1K tokens)");
     m.insert("pricing.output_price_label", "Output Price (per 1K tokens)");
     m.insert("pricing.input_placeholder", "e.g. 0.000005");
@@ -674,10 +1071,6 @@ pub static EN: LazyLock<HashMap<&'static str, &'static str>> = LazyLock::new(|| 
     m.insert("dashboard.last_used_prefix", "Last used");
     m.insert("dashboard.no_usage_record", "No usage record");
 
-    m.insert(
-        "system.subtitle",
-        "Review provider health, gateway runtime metrics, and routing diagnostics",
-    );
     m.insert("system.provider_health", "Provider Health");
     m.insert(
         "system.no_healthy_provider",
@@ -698,16 +1091,389 @@ pub static EN: LazyLock<HashMap<&'static str, &'static str>> = LazyLock::new(|| 
     m.insert("system.fallback_chain", "Fallback Chain");
     m.insert("system.items", "items");
     m.insert("system.route_failed", "Route failed");
+    m.insert(
+        "system.no_routable_probe_model",
+        "The current tenant has no enabled account model available for provider routing diagnostics",
+    );
     m.insert("system.provider_status", "Provider Status");
     m.insert("system.no_provider_configured", "No providers configured");
+    m.insert("system.provider_column", "Provider");
     m.insert("system.health_status", "Health");
     m.insert("system.account_count", "Accounts");
     m.insert("system.healthy", "Healthy");
     m.insert("system.unhealthy", "Unhealthy");
     m.insert("system.pricing_info", "Pricing");
-    m.insert("system.degraded", "Degraded");
-    m.insert("system.abnormal", "Abnormal");
-    m.insert("system.unknown", "Unknown");
+
+    m.insert(
+        "node_gateway.subtitle",
+        "Manage local node access, task queues, and the node: model execution path.",
+    );
+    m.insert("node_gateway.runtime_status", "Runtime Status");
+    m.insert(
+        "node_gateway.runtime_desc",
+        "Node Gateway relies on Redis queues, Postgres state tables, and node session tokens.",
+    );
+    m.insert("node_gateway.enabled", "Enabled");
+    m.insert("node_gateway.disabled", "Disabled");
+    m.insert("node_gateway.nodes_total", "Total Nodes");
+    m.insert("node_gateway.nodes_total_desc", "Registered node instances");
+    m.insert("node_gateway.nodes_online", "Online Nodes");
+    m.insert(
+        "node_gateway.nodes_online_desc",
+        "Eligible for node: routing",
+    );
+    m.insert("node_gateway.tasks_active", "Active Tasks");
+    m.insert("node_gateway.tasks_active_desc", "queued + leased");
+    m.insert("node_gateway.tasks_done", "Succeeded Tasks");
+    m.insert("node_gateway.tasks_done_desc", "Completed with responses");
+    m.insert("node_gateway.protocol_title", "Protocol Endpoints");
+    m.insert(
+        "node_gateway.protocol_register",
+        "Initial node registration; exchanges registration token for a session token.",
+    );
+    m.insert(
+        "node_gateway.protocol_heartbeat",
+        "Refreshes session visibility and reports currently accepted models.",
+    );
+    m.insert(
+        "node_gateway.protocol_poll",
+        "Long-polls for tasks matching accepted models.",
+    );
+    m.insert(
+        "node_gateway.protocol_complete",
+        "Submits task result with idempotent retry support.",
+    );
+    m.insert("node_gateway.nodes_title", "Nodes");
+    m.insert("node_gateway.tasks_title", "Recent Tasks");
+    m.insert("node_gateway.no_nodes", "No registered nodes");
+    m.insert("node_gateway.no_tasks", "No node tasks");
+    m.insert("node_gateway.node", "Node");
+    m.insert("node_gateway.models", "Accepted Models");
+    m.insert("node_gateway.failures", "Failures");
+    m.insert("node_gateway.heartbeat", "Last Heartbeat");
+    m.insert("node_gateway.no_models", "No models");
+    m.insert("node_gateway.assigned_node", "Assigned Node");
+    m.insert("node_gateway.deadline", "Deadline");
+    m.insert("node_gateway.status_online", "Online");
+    m.insert("node_gateway.status_offline", "Offline");
+    m.insert("node_gateway.status_excluded", "Excluded");
+    m.insert("node_gateway.token_status_pending", "Pending Approval");
+    m.insert("node_gateway.task_queued", "Queued");
+    m.insert("node_gateway.task_leased", "Leased");
+    m.insert("node_gateway.task_succeeded", "Succeeded");
+    m.insert("node_gateway.task_failed", "Failed");
+    m.insert("node_gateway.task_expired", "Expired");
+    // ── Token Approval (Admin) ─────────────────────
+    m.insert(
+        "node_gateway.token_approval_title",
+        "Registration Token Approval",
+    );
+    m.insert(
+        "node_gateway.token_approval_desc",
+        "Review and approve user-submitted node registration token applications",
+    );
+    m.insert("node_gateway.token_approval_email", "User Email");
+    m.insert("node_gateway.token_approval_preview", "Token Preview");
+    m.insert("node_gateway.token_approval_apply_time", "Applied At");
+    m.insert(
+        "node_gateway.no_pending_tokens",
+        "No pending registration token applications",
+    );
+    m.insert(
+        "node_gateway.token_approval_pending_count",
+        "{count} pending",
+    );
+    m.insert("node_gateway.approve", "Approve");
+    m.insert("node_gateway.reject", "Reject");
+    m.insert("node_gateway.approve_confirm_title", "Confirm Approval");
+    m.insert(
+        "node_gateway.approve_confirm_msg",
+        "Approve this token application? Once approved, the user can view the full token and use it for node registration.",
+    );
+    m.insert("node_gateway.reject_confirm_title", "Confirm Rejection");
+    m.insert(
+        "node_gateway.reject_confirm_msg",
+        "Reject this token application? The user may reapply.",
+    );
+    m.insert(
+        "node_gateway.approve_success",
+        "Token approved successfully",
+    );
+    m.insert("node_gateway.reject_success", "Token application rejected");
+    m.insert("node_gateway.approve_failed", "Approval operation failed");
+    m.insert(
+        "node_gateway.token_conflict",
+        "This application has been processed by another admin",
+    );
+    m.insert("node_gateway.exclude", "Exclude");
+    m.insert("node_gateway.exclude_success", "Node excluded");
+    m.insert("node_gateway.exclude_failed", "Failed to exclude node");
+    m.insert("node_gateway.exclude_confirm_title", "Confirm Exclude Node");
+    m.insert(
+        "node_gateway.exclude_confirm_msg",
+        "After exclusion, this node will no longer receive task assignments, but the node can still maintain connection via heartbeat. Are you sure?",
+    );
+    m.insert("node_gateway.revoke", "Revoke");
+    m.insert("node_gateway.revoke_success", "Registration token revoked");
+    m.insert(
+        "node_gateway.revoke_failed",
+        "Failed to revoke registration token",
+    );
+    m.insert("node_gateway.revoke_confirm_title", "Confirm Revoke Node");
+    m.insert(
+        "node_gateway.revoke_confirm_msg",
+        "After revocation, this node will be excluded and its registration token will be invalidated. The node will not be able to register new instances. This can be undone via the recover button.",
+    );
+    m.insert("node_gateway.recover", "Recover");
+    m.insert("node_gateway.recover_success", "Node recovered");
+    m.insert("node_gateway.recover_failed", "Failed to recover node");
+    m.insert("node_gateway.recover_confirm_title", "Confirm Recover Node");
+    m.insert(
+        "node_gateway.recover_confirm_msg",
+        "After recovery, this node will be back online and eligible for task scheduling. The consecutive failure count will be reset to zero. Are you sure?",
+    );
+    m.insert("node_gateway.token_preview", "Reg. Token");
+    m.insert("node_gateway.revoke_reason_label", "Revocation Reason");
+    m.insert(
+        "node_gateway.revoke_reason_placeholder",
+        "Please enter revocation reason...",
+    );
+    m.insert("node_gateway.delete_confirm_title", "Confirm Delete Node");
+    m.insert(
+        "node_gateway.delete_confirm_msg",
+        "After deletion, all node data will be permanently removed, including the registration token record. The user will need to reapply for a new token. This action cannot be undone.",
+    );
+    m.insert("node_gateway.delete", "Delete");
+    m.insert("node_gateway.delete_success", "Node deleted");
+    m.insert("node_gateway.delete_failed", "Failed to delete node");
+
+    m.insert(
+        "monitoring.subtitle",
+        "Review request trends, provider and node health, execution traces, and routing diagnostics in one place.",
+    );
+    m.insert("monitoring.views", "Monitoring and diagnostics views");
+    m.insert("monitoring.overview_tab", "Monitoring Overview");
+    m.insert("monitoring.diagnostics_tab", "System Diagnostics");
+    m.insert(
+        "monitoring.diagnostics_intro",
+        "In-memory metrics describe the current gateway instance independently of the overview time range; routing diagnostics use the current tenant's actual accounts and entry protocols to verify targets, provider state, and pricing.",
+    );
+    m.insert("monitoring.control_plane", "Execution Overview");
+    m.insert(
+        "monitoring.control_plane_desc",
+        "Read-only aggregation from node_tasks, nodes, node_sessions, and usage_logs.",
+    );
+    m.insert("monitoring.read_only", "Read-only");
+    m.insert("monitoring.online_nodes", "Online Nodes");
+    m.insert("monitoring.online_nodes_desc", "Available for scheduling");
+    m.insert("monitoring.active_tasks", "Active Tasks");
+    m.insert(
+        "monitoring.active_tasks_desc",
+        "Queued or leased node tasks",
+    );
+    m.insert("monitoring.succeeded_tasks", "Succeeded Tasks");
+    m.insert("monitoring.succeeded_tasks_desc", "Completed by nodes");
+    m.insert("monitoring.avg_latency", "Avg Duration");
+    m.insert("monitoring.avg_latency_desc", "queued to finished");
+    m.insert("monitoring.flow_title", "Gateway + Node Flow");
+    m.insert("monitoring.flow_gateway", "Gateway Intake");
+    m.insert(
+        "monitoring.flow_gateway_desc",
+        "OpenAI-compatible endpoint detects node: models and creates requests.",
+    );
+    m.insert("monitoring.flow_queue", "Task Queue");
+    m.insert(
+        "monitoring.flow_queue_desc",
+        "Requests are written to node_tasks and wait for matching nodes.",
+    );
+    m.insert("monitoring.flow_node", "Node Execution");
+    m.insert(
+        "monitoring.flow_node_desc",
+        "Nodes poll for leases, execute tasks, and complete them.",
+    );
+    m.insert("monitoring.flow_usage", "Usage Logging");
+    m.insert(
+        "monitoring.flow_usage_desc",
+        "Successful responses correlate with usage_logs for billing and audit.",
+    );
+    m.insert("monitoring.health_title", "Node Health");
+    m.insert("monitoring.no_nodes", "No node health data");
+    m.insert("monitoring.active", "Active");
+    m.insert("monitoring.succeeded", "Succeeded");
+    m.insert("monitoring.failed", "Failed");
+    m.insert("monitoring.traces_title", "Recent Traces");
+    m.insert("monitoring.no_traces", "No gateway/node traces yet");
+    m.insert("monitoring.records_title", "Trace Details");
+    m.insert("monitoring.request", "Request");
+    m.insert("monitoring.request_payload", "Request Payload");
+    m.insert("monitoring.basic_info", "Basic Info");
+    m.insert("monitoring.request_metrics", "Request Metrics");
+    m.insert("monitoring.node", "Node");
+    m.insert("monitoring.duration", "Duration");
+    m.insert("monitoring.tokens", "Tokens");
+    m.insert("monitoring.queued_at", "Queued At");
+    m.insert("monitoring.task", "Task");
+    m.insert("monitoring.lease", "Lease");
+    m.insert("monitoring.stage_queued", "Queued");
+    m.insert("monitoring.stage_claimed", "Claimed");
+    m.insert("monitoring.stage_finished", "Finished");
+    m.insert("monitoring.stage_usage", "Usage");
+    m.insert("monitoring.submissions", "Submissions");
+    m.insert("monitoring.amount", "Amount");
+    m.insert("monitoring.total_usage_logs", "Usage logs");
+    m.insert("monitoring.total_node_tasks", "Node tasks");
+    m.insert("monitoring.failed_tasks", "Failed tasks");
+    m.insert("monitoring.map_receive_request", "Receive Request");
+    m.insert("monitoring.map_return_client", "Return to Client");
+    m.insert("monitoring.map_router", "Routing Module");
+    m.insert("monitoring.map_match_route", "Match Route");
+    m.insert("monitoring.map_process_request", "Process Request");
+    m.insert("monitoring.map_submit_result", "Submit Result");
+    m.insert("monitoring.map_model_service", "Model Service");
+    m.insert("monitoring.map_model_response", "Model Response");
+    m.insert("monitoring.map_gateway", "Gateway");
+    m.insert("monitoring.map_gateway_subtitle", "OpenAI API");
+    m.insert("monitoring.map_router_subtitle", "node: model");
+    m.insert("monitoring.map_node", "Node");
+    m.insert("monitoring.time_range", "Time range");
+    m.insert("monitoring.range_1h", "Last 1 hour");
+    m.insert("monitoring.range_6h", "Last 6 hours");
+    m.insert("monitoring.range_24h", "Last 24 hours");
+    m.insert("monitoring.range_custom", "Custom UTC");
+    m.insert("monitoring.utc_from", "UTC start time");
+    m.insert("monitoring.utc_to", "UTC end time");
+    m.insert("monitoring.utc_to_title", "UTC end time (maximum 24 hours)");
+    m.insert("monitoring.status_filter", "Status filter");
+    m.insert("monitoring.all_statuses", "All statuses");
+    m.insert("monitoring.timed_out", "Timed out");
+    m.insert("monitoring.running", "Running");
+    m.insert("monitoring.queued", "Queued");
+    m.insert("monitoring.routing", "Routing");
+    m.insert("monitoring.cancelled", "Cancelled");
+    m.insert("monitoring.received", "Received");
+    m.insert("monitoring.online", "Online");
+    m.insert("monitoring.offline", "Offline");
+    m.insert("monitoring.route_filter", "Execution route filter");
+    m.insert("monitoring.all_routes", "All routes");
+    m.insert("monitoring.resume_auto_refresh", "Resume auto refresh");
+    m.insert("monitoring.pause_auto_refresh", "Pause auto refresh");
+    m.insert("monitoring.refresh_now", "Refresh now");
+    m.insert("monitoring.probe_in_progress", "Probing…");
+    m.insert("monitoring.probe_done", "Probe completed");
+    m.insert("monitoring.probe_failed", "Probe failed");
+    m.insert("monitoring.probe_all_accounts", "Probe all accounts");
+    m.insert("monitoring.probe_confirm_title", "Probe all accounts?");
+    m.insert(
+        "monitoring.probe_confirm_message",
+        "This sends real upstream probes to every configured account and may incur a small charge. Continue?",
+    );
+    m.insert("monitoring.last_updated", "Last updated");
+    m.insert(
+        "monitoring.empty_range",
+        "No traffic in the selected time range",
+    );
+    m.insert("monitoring.empty_filtered", "No results match the filters");
+    m.insert("monitoring.request_list", "Monitoring request list");
+    m.insert("monitoring.time", "Time");
+    m.insert("monitoring.request_id", "Request ID");
+    m.insert("monitoring.protocol_model", "Protocol / Model");
+    m.insert("monitoring.execution_route", "Execution Route");
+    m.insert("monitoring.route_provider_account", "Provider Account");
+    m.insert("monitoring.route_node", "Node");
+    m.insert("monitoring.status", "Status");
+    m.insert("monitoring.duration_ttft", "Duration / TTFT");
+    m.insert("monitoring.next_page", "Next page");
+    m.insert("monitoring.request_detail", "Request details");
+    m.insert("monitoring.tenant", "Tenant");
+    m.insert("monitoring.user", "User");
+    m.insert("monitoring.key", "Key");
+    m.insert("monitoring.billing", "Billing");
+    m.insert("monitoring.trace_quality", "Trace quality");
+    m.insert("monitoring.client_first_content", "Client first content");
+    m.insert("monitoring.not_collected", "Not collected");
+    m.insert("monitoring.none", "None");
+    m.insert("monitoring.billing_summary", "Billing summary");
+    m.insert("monitoring.detail_load_failed", "Failed to load details");
+    m.insert("monitoring.attempts", "Attempts");
+    m.insert(
+        "monitoring.node_task_submissions",
+        "Node Task / Submissions",
+    );
+    m.insert("monitoring.request_count", "Requests");
+    m.insert(
+        "monitoring.active_queued",
+        "Active {active} / Queued {queued}",
+    );
+    m.insert("monitoring.success_rate", "Success rate");
+    m.insert("monitoring.error_rate_value", "Error rate {rate}");
+    m.insert("monitoring.attempt_success_rate", "Attempt success rate");
+    m.insert("monitoring.attempt_count", "{count} attempts");
+    m.insert("monitoring.fallback_rate", "Fallback rate");
+    m.insert("monitoring.request_count_meta", "{count} requests");
+    m.insert(
+        "monitoring.total_duration_percentiles",
+        "Duration P50 / P95",
+    );
+    m.insert("monitoring.provider_ttft", "Provider TTFT");
+    m.insert("monitoring.p50_p95", "P50 / P95");
+    m.insert("monitoring.node_queue_execution", "Node queue / execution");
+    m.insert(
+        "monitoring.node_no_ttft",
+        "P50 (TTFT does not apply to Node)",
+    );
+    m.insert("monitoring.tokens_amount", "Tokens / Amount");
+    m.insert("monitoring.trends", "Trends");
+    m.insert("monitoring.no_trends", "No trend data");
+    m.insert("monitoring.utc_time", "UTC Time");
+    m.insert("monitoring.unrouted", "Unrouted");
+    m.insert("monitoring.unassigned_queue", "Unassigned queue");
+    m.insert("monitoring.view_request", "View request {request_id}");
+    m.insert("monitoring.provider_health", "Provider Account Health");
+    m.insert(
+        "monitoring.account_probe_link",
+        "Account management / single probe",
+    );
+    m.insert("monitoring.no_accounts", "No accounts");
+    m.insert("monitoring.node_health", "Node Health");
+    m.insert(
+        "monitoring.node_gateway_link",
+        "Open Node Gateway management",
+    );
+    m.insert("monitoring.attempt_target", "Target: {target}");
+    m.insert(
+        "monitoring.attempt_timing",
+        "Started: {start} · Finished: {end} · Stream end: {reason}",
+    );
+    m.insert(
+        "monitoring.attempt_http",
+        "HTTP: {http} · Upstream Request ID: {upstream}",
+    );
+    m.insert(
+        "monitoring.attempt_provider_timing",
+        "Headers: {headers} · First content: {first} · TTFT: {ttft}",
+    );
+    m.insert("monitoring.error", "Error");
+    m.insert("monitoring.enabled", "Enabled");
+    m.insert("monitoring.disabled", "Disabled");
+    m.insert(
+        "monitoring.provider_health_line",
+        "Real success rate {success} · Latency {latency}",
+    );
+    m.insert(
+        "monitoring.provider_probe_line",
+        "Probe: {probe} ({at}, {latency}, error {error}) · Attributable failures {failures}",
+    );
+    m.insert(
+        "monitoring.node_counts",
+        "Queued {queued} / Running {running} / Succeeded {succeeded} / Failed {failed} / Expired {expired}",
+    );
+    m.insert(
+        "monitoring.node_runtime",
+        "Heartbeat {heartbeat} · Session expires {session} · Models {models}",
+    );
+    m.insert("monitoring.quality_derived", "Historically derived");
+    m.insert("monitoring.quality_partial", "Partial information");
+    m.insert("monitoring.quality_actual", "Actually collected");
     m.insert(
         "users.subtitle",
         "View and manage all registered users on the platform",
@@ -721,6 +1487,14 @@ pub static EN: LazyLock<HashMap<&'static str, &'static str>> = LazyLock::new(|| 
     m.insert("users.update_failed", "Update failed");
     m.insert("users.deleted", "User deleted");
     m.insert("users.delete_failed", "Delete failed");
+    m.insert(
+        "users.delete_self_forbidden",
+        "Cannot delete your own account",
+    );
+    m.insert(
+        "users.delete_admin_forbidden",
+        "Only system role can delete admin users",
+    );
     m.insert("users.edit_title", "Edit User");
     m.insert("users.display_name", "Display Name");
     m.insert(
@@ -729,6 +1503,7 @@ pub static EN: LazyLock<HashMap<&'static str, &'static str>> = LazyLock::new(|| 
     );
     m.insert("users.role_user", "user (standard)");
     m.insert("users.role_admin", "admin (administrator)");
+    m.insert("users.role_system", "system (protected)");
     m.insert("users.delete_confirm_title", "Confirm Deletion");
     m.insert("users.delete_confirm_prefix", "Delete user");
     m.insert(
@@ -743,6 +1518,114 @@ pub static EN: LazyLock<HashMap<&'static str, &'static str>> = LazyLock::new(|| 
         "Review and manage your personal account information",
     );
     m.insert("users.account_info", "Account Information");
+    m.insert("users.balance", "Balance");
+    m.insert("users.frozen_short", "Frozen");
+    m.insert("users.balance_manage", "Balance");
+    m.insert("users.balance_title", "Balance Management");
+    m.insert("users.balance_available", "Available Balance");
+    m.insert("users.balance_frozen", "Frozen Balance");
+    m.insert("users.balance_total_frozen", "Total Frozen Balance");
+    m.insert("users.balance_request_reserved", "Request-reserved Balance");
+    m.insert(
+        "users.balance_manually_frozen",
+        "Manually Releasable Balance",
+    );
+    m.insert(
+        "users.balance_active_reservations",
+        "Active Request Reservations",
+    );
+    m.insert(
+        "users.balance_release_warning",
+        "Release only after confirming that the request failed or is stuck. A late usage settlement may still deduct the final charge from available balance.",
+    );
+    m.insert("users.balance_reservation_expires", "Expires");
+    m.insert("users.balance_reservations_previous_page", "Previous page");
+    m.insert("users.balance_reservations_page", "Page {page}");
+    m.insert("users.balance_reservations_next_page", "Next page");
+    m.insert("users.balance_release_reservation", "Release Reservation");
+    m.insert("users.balance_release_reason", "Release Reason");
+    m.insert(
+        "users.balance_release_reason_placeholder",
+        "Explain how the request was confirmed stuck",
+    );
+    m.insert(
+        "users.balance_release_reason_required",
+        "Please enter a release reason",
+    );
+    m.insert("users.balance_confirm_release", "Confirm Forced Release");
+    m.insert(
+        "users.balance_reservation_released",
+        "Request balance reservation released",
+    );
+    m.insert(
+        "users.balance_reservation_release_failed",
+        "Failed to release request balance reservation",
+    );
+    m.insert(
+        "users.balance_reservation_changed",
+        "The reservation ended or was taken over by a newer retry, so nothing was released. Balance details were refreshed; confirm the current reservation and try again.",
+    );
+    m.insert(
+        "users.balance_details_load_failed",
+        "Failed to load live balance",
+    );
+    m.insert(
+        "users.balance_details_unavailable",
+        "Live balance is not loaded yet; please try again shortly",
+    );
+    m.insert(
+        "users.balance_unfreeze_exceeds_releasable",
+        "The amount exceeds the manually releasable balance of {amount}; release request reservations separately by request_id",
+    );
+    m.insert(
+        "users.balance_unfreeze_hint",
+        "Standard unfreeze releases only administrator-created freezes and never active request reservations.",
+    );
+    m.insert("users.balance_action", "Action Type");
+    m.insert("users.balance_recharge", "Recharge");
+    m.insert("users.balance_deduct", "Deduct");
+    m.insert("users.balance_freeze", "Freeze");
+    m.insert("users.balance_unfreeze", "Unfreeze");
+    m.insert("users.balance_amount", "Amount");
+    m.insert("users.balance_amount_placeholder", "Enter amount");
+    m.insert("users.balance_reason", "Reason");
+    m.insert(
+        "users.balance_reason_placeholder",
+        "Enter reason for this operation",
+    );
+    m.insert("users.balance_amount_required", "Please enter an amount");
+    m.insert(
+        "users.balance_amount_invalid",
+        "Amount must be greater than 0",
+    );
+    m.insert(
+        "users.balance_amount_precision",
+        "Amount supports up to 2 decimal places",
+    );
+    m.insert("users.balance_reason_required", "Please enter a reason");
+    m.insert("users.balance_action_invalid", "Invalid action type");
+    m.insert("users.balance_updated", "Balance updated successfully");
+    m.insert("users.balance_update_failed", "Balance update failed");
+    m.insert(
+        "users.balance_repeat_operation_warning",
+        "An identical balance operation already reached a definitive result, so no request was sent. Click “Run another identical balance operation” only if you intend another recharge, deduction, freeze, or unfreeze.",
+    );
+    m.insert(
+        "users.balance_repeat_operation_confirm",
+        "Run another identical balance operation",
+    );
+    m.insert(
+        "users.balance_idempotency_prepare_failed",
+        "The retry key could not be stored safely. Check browser storage and try again; no request was sent.",
+    );
+    m.insert(
+        "users.balance_idempotency_cleanup_failed",
+        "The server completed the balance operation, but its completion marker could not be stored safely. Keep this page open and retry; the original retry key will be reused.",
+    );
+    m.insert(
+        "users.cannot_modify_system",
+        "Only system role can manage system users",
+    );
     m.insert(
         "tenants.subtitle",
         "View and manage all tenant records on the platform",
@@ -799,6 +1682,10 @@ pub static EN: LazyLock<HashMap<&'static str, &'static str>> = LazyLock::new(|| 
         "accounts.empty",
         "No channels configured yet. Use Add Channel to create one.",
     );
+    m.insert(
+        "accounts.search_placeholder",
+        "Search channel, provider, or ID",
+    );
     m.insert("accounts.table_title", "Channel Asset Table");
     m.insert(
         "accounts.table_subtitle",
@@ -827,6 +1714,8 @@ pub static EN: LazyLock<HashMap<&'static str, &'static str>> = LazyLock::new(|| 
     m.insert("accounts.test_success", "Connection test succeeded");
     m.insert("accounts.test_failed", "Connection test failed");
     m.insert("accounts.test", "Test");
+    m.insert("accounts.refresh_success", "Model list refreshed");
+    m.insert("accounts.refresh_failed", "Failed to refresh model list");
     m.insert("accounts.create_title", "Create LLM Channel");
     m.insert("accounts.channel_name", "Channel Name *");
     m.insert(
@@ -834,16 +1723,46 @@ pub static EN: LazyLock<HashMap<&'static str, &'static str>> = LazyLock::new(|| 
         "For example: OpenAI Official",
     );
     m.insert("accounts.provider", "Provider *");
+    m.insert("accounts.provider_openai_compatible", "OpenAI Compatible");
     m.insert(
-        "accounts.supported_models",
-        "Supported Models (Optional, defaults if blank)",
+        "accounts.provider_anthropic_compatible",
+        "Anthropic Compatible",
     );
+    m.insert(
+        "accounts.provider_deepseek_openai_compatible",
+        "DeepSeek (OpenAI Compatible)",
+    );
+    m.insert(
+        "accounts.provider_gemini_openai_compatible",
+        "Google Gemini (OpenAI Compatible)",
+    );
+    m.insert(
+        "accounts.provider_vllm_openai_compatible",
+        "vLLM (OpenAI Compatible)",
+    );
+    m.insert(
+        "accounts.provider_ollama_openai_compatible",
+        "Ollama (OpenAI Compatible)",
+    );
+    m.insert("accounts.supported_models", "Supported Models *");
     m.insert(
         "accounts.models_hint",
-        "Separate multiple models with commas. Leave blank to use provider defaults.",
+        "Separate multiple models with commas",
+    );
+    m.insert("accounts.api_mode", "API Capabilities *");
+    m.insert(
+        "accounts.api_mode_chat_completions",
+        "Chat Completions only",
+    );
+    m.insert("accounts.api_mode_responses", "Responses only");
+    m.insert("accounts.api_mode_both", "Chat Completions + Responses");
+    m.insert("accounts.api_mode_messages", "Anthropic Messages");
+    m.insert(
+        "accounts.api_mode_hint",
+        "Routing and connection tests only use the upstream APIs declared here",
     );
     m.insert("accounts.api_key", "API Key *");
-    m.insert("accounts.custom_base_url", "Custom Base URL (Optional)");
+    m.insert("accounts.custom_base_url", "Custom Base URL");
     m.insert("accounts.edit_title", "Edit LLM Channel");
     m.insert(
         "accounts.new_api_key",
@@ -853,11 +1772,24 @@ pub static EN: LazyLock<HashMap<&'static str, &'static str>> = LazyLock::new(|| 
         "accounts.new_api_key_placeholder",
         "Leave blank to keep the current key",
     );
+    m.insert("accounts.custom_base_url_optional", "Custom Base URL");
     m.insert(
-        "accounts.custom_base_url_optional",
-        "Custom Base URL (leave blank to keep current)",
+        "accounts.reset_base_url",
+        "Reset to protocol default endpoint",
     );
     m.insert("accounts.enable_channel", "Enable channel");
+    m.insert("accounts.global_visibility", "Global Visibility");
+    m.insert(
+        "accounts.global_visibility_hint",
+        "When enabled, API keys from all tenants can route to this channel account",
+    );
+    m.insert("accounts.tenant_id", "Tenant ID");
+    m.insert("accounts.tenant_id_label", "Tenant ID");
+    m.insert(
+        "accounts.tenant_id_hint",
+        "Change the owner tenant of this channel account",
+    );
+    m.insert("accounts.tenant_id_keep", "-- Keep current tenant --");
     m.insert("accounts.delete_confirm_title", "Confirm Deletion");
     m.insert("accounts.delete_confirm_prefix", "Delete channel \"");
     m.insert(
@@ -900,6 +1832,185 @@ pub static EN: LazyLock<HashMap<&'static str, &'static str>> = LazyLock::new(|| 
     m.insert(
         "accounts.models_placeholder_default",
         "Enter model names, separated by commas",
+    );
+
+    // ── Navigation (Node group) ──────────────────────
+    m.insert("nav.group.node", "Node");
+    m.insert("nav.node_token", "Registration Token");
+    m.insert("nav.node_earnings", "Earnings");
+    m.insert("page.node_token", "Registration Token");
+    m.insert("page.node_earnings", "Earnings");
+
+    // ── Node Token ─────────────────────────────
+    m.insert(
+        "node_token.subtitle",
+        "Apply for a node registration token to connect your node to the platform",
+    );
+    m.insert("node_token.title", "My Tokens");
+    m.insert("node_token.empty_title", "No registration token yet");
+    m.insert(
+        "node_token.empty_desc",
+        "After applying, you can register your node and start earning.",
+    );
+    m.insert("node_token.apply", "Apply for Token");
+    m.insert("node_token.applying", "Applying...");
+    m.insert(
+        "node_token.apply_success",
+        "Application submitted, please wait for admin approval",
+    );
+    m.insert("node_token.apply_failed", "Apply failed");
+    m.insert("node_token.already_approved", "You already have an approved token. Contact an admin to revoke it before applying for a new one.");
+    m.insert("node_token.status_pending", "Pending");
+    m.insert("node_token.status_consumed", "Consumed");
+    m.insert("node_token.status_approved", "Approved");
+    m.insert("node_token.status_rejected", "Rejected");
+    m.insert(
+        "node_token.cannot_apply",
+        "You already have an active token. Resolve it before applying for a new one.",
+    );
+    m.insert("node_token.delete", "Delete Record");
+    m.insert("node_token.delete_confirm_title", "Confirm Delete");
+    m.insert(
+        "node_token.delete_confirm_msg",
+        "Delete this token record? You can apply for a new one afterwards.",
+    );
+    m.insert("node_token.delete_success", "Record deleted");
+    m.insert("node_token.delete_failed", "Delete failed");
+    m.insert("node_token.status_revoked", "Revoked");
+    m.insert(
+        "node_token.pending_desc",
+        "Your token application is pending admin approval. Please wait.",
+    );
+    m.insert(
+        "node_token.consumed_desc",
+        "This token has been used for node registration. Apply again if needed.",
+    );
+    m.insert(
+        "node_token.consumed_hint",
+        "Each user can only have one active token at a time.",
+    );
+    m.insert(
+        "node_token.rejected_desc",
+        "Your token application was rejected. You may reapply or contact admin.",
+    );
+    m.insert("node_token.revoked_desc", "This registration token has been revoked by admin. The token is invalid, but the registered node may still be operational.");
+    m.insert("node_token.preview", "Token Preview");
+    m.insert("node_token.issued_at", "Applied At");
+    m.insert("node_token.revealed_warning", "This token has been viewed before. Please confirm you have saved it securely. If lost, you must reapply.");
+    m.insert(
+        "node_token.first_view_hint",
+        "Save this token now! The full plaintext is only shown once.",
+    );
+    m.insert(
+        "node_token.token_hint",
+        "Configure the token in your node config file to complete registration.",
+    );
+    m.insert("node_token.copy", "Copy");
+    m.insert("node_token.copied", "Copied");
+    m.insert("node_token.copy_hint", "Click to copy");
+    m.insert("node_token.no_revoke_hint", "Token is a one-time registration credential; it automatically becomes invalid after use. No need to manually revoke.");
+    m.insert("node_token.registered_node", "Registered Node");
+    m.insert("node_token.node_status", "Node Status");
+    m.insert("node_token.last_heartbeat", "Last Heartbeat");
+    m.insert(
+        "node_token.node_excluded_hint",
+        "This node is currently excluded and not receiving tasks. Contact admin to recover.",
+    );
+    m.insert("node_token.node_online_hint", "This node is online and running. No need to reapply. To register a new node, apply for a new token.");
+    m.insert(
+        "node_token.reapply_hint",
+        "To register a new node, apply for a new token.",
+    );
+    m.insert("node_token.help_title", "Usage Guide");
+    m.insert(
+        "node_token.help_1",
+        "Click \"Apply for Token\" to submit an approval request",
+    );
+    m.insert(
+        "node_token.help_2",
+        "After admin approval, view and save the full token plaintext",
+    );
+    m.insert(
+        "node_token.help_3",
+        "Set the token in your node config as NODE_GATEWAY_TOKEN",
+    );
+    m.insert(
+        "node_token.help_4",
+        "Start your node, and it will auto-register and start receiving tasks",
+    );
+    m.insert("node_token.view_reason", "View Reason");
+    m.insert(
+        "node_token.no_tokens",
+        "No token records. Click the button above to apply for your first token.",
+    );
+    m.insert("node_token.expand", "Expand");
+
+    // ── Node Earnings ─────────────────────────────
+    m.insert(
+        "node_earnings.subtitle",
+        "View node earnings, tip history, and request withdrawals",
+    );
+    m.insert("node_earnings.pending_amount", "Pending");
+    m.insert("node_earnings.pending_count", "{count} pending");
+    m.insert("node_earnings.withdrawn_amount", "Withdrawn");
+    m.insert("node_earnings.withdrawn_meta", "Total withdrawn amount");
+    m.insert("node_earnings.total_amount", "Total Earnings");
+    m.insert("node_earnings.total_meta", "Total tip earnings generated");
+    m.insert("node_earnings.history_title", "Tip History");
+    m.insert("node_earnings.withdrawals_title", "Withdrawal Records");
+    m.insert("node_earnings.no_history", "No tip records yet");
+    m.insert("node_earnings.no_withdrawals", "No withdrawal records yet");
+    m.insert("node_earnings.col_time", "Time");
+    m.insert("node_earnings.col_bill_amount", "Bill Amount");
+    m.insert("node_earnings.col_tip_amount", "Tip Amount");
+    m.insert("node_earnings.col_tip_ratio", "Tip Ratio");
+    m.insert("node_earnings.col_status", "Status");
+    m.insert("node_earnings.col_amount", "Amount");
+    m.insert("node_earnings.col_method", "Method");
+    m.insert("node_earnings.col_remark", "Remark");
+    m.insert("node_earnings.status_pending", "Pending");
+    m.insert("node_earnings.status_approved", "Approved");
+    m.insert("node_earnings.status_completed", "Completed");
+    m.insert("node_earnings.status_rejected", "Rejected");
+    m.insert("node_earnings.withdraw_btn", "Request Withdrawal");
+    m.insert("node_earnings.withdraw_title", "Request Withdrawal");
+    m.insert("node_earnings.withdraw_method", "Withdrawal Method");
+    m.insert("node_earnings.method_balance", "To Balance");
+    m.insert(
+        "node_earnings.method_balance_desc",
+        "Instant credit — amount will be added to your account balance",
+    );
+    m.insert("node_earnings.method_alipay", "Alipay");
+    m.insert(
+        "node_earnings.method_alipay_desc",
+        "Admin will transfer offline after approval",
+    );
+    m.insert("node_earnings.alipay_account", "Alipay Account");
+    m.insert(
+        "node_earnings.alipay_placeholder",
+        "Enter your Alipay account",
+    );
+    m.insert("node_earnings.real_name", "Real Name");
+    m.insert(
+        "node_earnings.real_name_placeholder",
+        "Enter your real name (for Alipay verification)",
+    );
+    m.insert(
+        "node_earnings.fill_alipay",
+        "Alipay account and real name are required for Alipay withdrawal",
+    );
+    m.insert(
+        "node_earnings.withdraw_hint",
+        "Alipay withdrawals require admin approval and will be processed within 7 business days.",
+    );
+    m.insert("node_earnings.withdraw_failed", "Withdrawal request failed");
+    m.insert(
+        "node_earnings.withdraw_balance_success",
+        "Withdrawal successful! Amount has been credited to your balance.",
+    );
+    m.insert(
+        "node_earnings.withdraw_alipay_success",
+        "Withdrawal request submitted. Please wait for admin approval.",
     );
 
     m

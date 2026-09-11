@@ -2,10 +2,10 @@
 //!
 //! 处理 Produce AI Key（用户访问系统的 API Key）的验证和解析。
 
-use keycompute_db::{ProduceAiKey, User};
+use keycompute_db::{DbRouter, ProduceAiKey, User};
 use keycompute_types::{KeyComputeError, Result};
+use sea_orm::ConnectionTrait;
 use sha2::{Digest, Sha256};
-use sqlx::PgPool;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -16,13 +16,13 @@ use crate::permission::{AuthType, build_permissions};
 #[derive(Clone)]
 pub struct ProduceAiKeyValidator {
     /// 数据库连接池（可选）
-    pool: Option<Arc<PgPool>>,
+    pool: Option<Arc<DbRouter>>,
 }
 
 impl std::fmt::Debug for ProduceAiKeyValidator {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ProduceAiKeyValidator")
-            .field("pool", &self.pool.as_ref().map(|_| "PgPool"))
+            .field("pool", &self.pool.as_ref().map(|_| "DatabaseConnection"))
             .finish()
     }
 }
@@ -34,7 +34,7 @@ impl ProduceAiKeyValidator {
     }
 
     /// 创建带数据库连接的验证器
-    pub fn with_pool(pool: Arc<PgPool>) -> Self {
+    pub fn with_pool(pool: Arc<DbRouter>) -> Self {
         Self { pool: Some(pool) }
     }
 
@@ -60,7 +60,7 @@ impl ProduceAiKeyValidator {
 
         // 从数据库验证
         match &self.pool {
-            Some(pool) => self.validate_from_database(pool, &key_hash).await,
+            Some(pool) => self.validate_from_database(pool.as_ref(), &key_hash).await,
             None => {
                 // 无数据库连接时返回错误，不使用不安全的 fallback
                 tracing::error!(
@@ -104,7 +104,11 @@ impl ProduceAiKeyValidator {
     }
 
     /// 从数据库验证 Produce AI Key
-    async fn validate_from_database(&self, pool: &PgPool, key_hash: &str) -> Result<AuthContext> {
+    async fn validate_from_database(
+        &self,
+        pool: &impl ConnectionTrait,
+        key_hash: &str,
+    ) -> Result<AuthContext> {
         // 查询 Produce AI Key
         let produce_ai_key = ProduceAiKey::find_by_hash(pool, key_hash)
             .await
@@ -134,9 +138,14 @@ impl ProduceAiKeyValidator {
             .await
             .map_err(|e| KeyComputeError::DatabaseError(format!("Failed to query user: {}", e)))?;
 
+        // 用户已被删除但 key 记录残留（孤儿 key），对外统一返回通用错误，避免泄露内部状态
         let Some(user) = user else {
-            tracing::warn!(user_id = %produce_ai_key.user_id, "User not found");
-            return Err(KeyComputeError::AuthError("User not found".into()));
+            tracing::warn!(
+                produce_ai_key_id = %produce_ai_key.id,
+                user_id = %produce_ai_key.user_id,
+                "User not found for produce AI key (orphaned key)"
+            );
+            return Err(KeyComputeError::AuthError("Invalid API key".into()));
         };
 
         // 验证用户租户 ID 与 Produce AI Key 租户 ID 一致
@@ -147,7 +156,7 @@ impl ProduceAiKeyValidator {
                 produce_ai_key_tenant_id = %produce_ai_key.tenant_id,
                 "User tenant does not match Produce AI key tenant"
             );
-            return Err(KeyComputeError::AuthError("User tenant mismatch".into()));
+            return Err(KeyComputeError::AuthError("Invalid API key".into()));
         }
 
         // 查询租户信息并验证状态
@@ -159,21 +168,18 @@ impl ProduceAiKeyValidator {
             })?;
 
         let Some(tenant) = tenant else {
-            tracing::warn!(tenant_id = %user.tenant_id, "Tenant not found");
-            return Err(KeyComputeError::AuthError("Tenant not found".into()));
+            tracing::warn!(tenant_id = %user.tenant_id, "Tenant not found for produce AI key");
+            return Err(KeyComputeError::AuthError("Invalid API key".into()));
         };
 
-        // 检查租户状态
+        // 检查租户状态：具体状态值属于内部信息只进日志，不对外暴露
         if !tenant.is_active() {
             tracing::warn!(
                 tenant_id = %tenant.id,
                 status = %tenant.status,
                 "Tenant is not active"
             );
-            return Err(KeyComputeError::AuthError(format!(
-                "Tenant is not active: {}",
-                tenant.status
-            )));
+            return Err(KeyComputeError::AuthError("Tenant is not active".into()));
         }
 
         // 更新最后使用时间
@@ -198,6 +204,7 @@ impl ProduceAiKeyValidator {
             produce_ai_key_id: produce_ai_key.id,
             role: user.role,
             permissions,
+            token_version: 0,
             user_info: None,
             tenant_info: None,
         })

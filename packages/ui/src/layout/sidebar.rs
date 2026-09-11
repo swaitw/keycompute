@@ -3,6 +3,7 @@ use dioxus::prelude::*;
 use crate::icons::{
     IconActivity, IconBarChart, IconBuilding, IconChevronLeft, IconChevronRight, IconHome, IconKey,
     IconReceipt, IconServer, IconSettings, IconShare, IconTag, IconUser, IconUsers, IconWallet,
+    IconX,
 };
 
 /// 单条导航项
@@ -67,19 +68,29 @@ pub enum NavIcon {
 /// - `collapsed`：是否折叠状态（Signal）
 /// - `mobile_open`：移动端是否打开（Signal）
 /// - `current_path`：当前活跃路径
+/// - `site_logo_src`：站点 Logo 地址，为空时回退为站点名称首字母
 #[component]
 pub fn Sidebar(
     #[props(default)] sections: Vec<NavSection>,
     collapsed: Signal<bool>,
-    mobile_open: Signal<bool>,
+    mut mobile_open: Signal<bool>,
     #[props(default)] current_path: String,
     #[props(default)] expand_sidebar_title: String,
     #[props(default)] collapse_sidebar_title: String,
     #[props(default)] expand_label: String,
     #[props(default)] collapse_label: String,
+    #[props(default)] close_menu_title: String,
+    #[props(default = "KeyCompute".to_string())] site_name: String,
+    #[props(default)] site_logo_src: String,
 ) -> Element {
     let is_collapsed = collapsed();
     let is_mobile_open = mobile_open();
+    let site_initial = site_name
+        .chars()
+        .find(|character| !character.is_whitespace())
+        .unwrap_or('K')
+        .to_uppercase()
+        .collect::<String>();
 
     let sidebar_class = {
         let mut cls = "sidebar".to_string();
@@ -100,13 +111,29 @@ pub fn Sidebar(
     };
 
     rsx! {
-        nav { class: "{sidebar_class}",
+        nav { id: "app-sidebar", class: "{sidebar_class}", aria_label: "Main navigation",
             // Logo 区域
             div { class: "sidebar-logo",
-                div { class: "sidebar-logo-icon", "K" }
+                if site_logo_src.trim().is_empty() {
+                    div { class: "sidebar-logo-icon sidebar-logo-fallback", "{site_initial}" }
+                } else {
+                    img {
+                        class: "sidebar-logo-icon",
+                        src: "{site_logo_src}",
+                        alt: "{site_name}",
+                    }
+                }
                 div { class: "sidebar-logo-copy",
-                    span { class: "sidebar-logo-text", "KeyCompute" }
-                    span { class: "sidebar-logo-kicker", "AI Gateway" }
+                    span { class: "sidebar-logo-text", "{site_name}" }
+                    span { class: "sidebar-logo-kicker", "AI token platform" }
+                }
+                button {
+                    class: "sidebar-mobile-close",
+                    r#type: "button",
+                    title: "{close_menu_title}",
+                    aria_label: "{close_menu_title}",
+                    onclick: move |_| mobile_open.set(false),
+                    IconX { size: 20 }
                 }
             }
 
@@ -121,6 +148,7 @@ pub fn Sidebar(
                             SidebarNavItem {
                                 item: item.clone(),
                                 collapsed: is_collapsed,
+                                mobile_open,
                                 current_path: current_path.clone(),
                             }
                         }
@@ -149,9 +177,13 @@ pub fn Sidebar(
 
 /// 单条导航项组件（内部组件）
 #[component]
-fn SidebarNavItem(item: NavItem, collapsed: bool, current_path: String) -> Element {
-    let is_active =
-        current_path == item.path || (item.path != "/" && current_path.starts_with(&item.path));
+fn SidebarNavItem(
+    item: NavItem,
+    collapsed: bool,
+    mut mobile_open: Signal<bool>,
+    current_path: String,
+) -> Element {
+    let is_active = nav_item_is_active(&current_path, &item.path);
 
     let item_class = if is_active {
         "sidebar-item active"
@@ -175,11 +207,7 @@ fn SidebarNavItem(item: NavItem, collapsed: bool, current_path: String) -> Eleme
         NavIcon::Activity => rsx! { IconActivity { size: 20 } },
     };
 
-    let title_attr = if collapsed {
-        item.label.clone()
-    } else {
-        String::new()
-    };
+    let title_attr = item.label.clone();
     let label = item.label.clone();
     let path = item.path.clone();
     let nav = use_navigator();
@@ -189,6 +217,7 @@ fn SidebarNavItem(item: NavItem, collapsed: bool, current_path: String) -> Eleme
             class: "{item_class}",
             title: "{title_attr}",
             onclick: move |_| {
+                mobile_open.set(false);
                 nav.push(path.as_str());
             },
             span { class: "sidebar-item-icon", {icon_el} }
@@ -204,5 +233,32 @@ fn SidebarNavItem(item: NavItem, collapsed: bool, current_path: String) -> Eleme
                 }
             }
         }
+    }
+}
+
+fn nav_item_is_active(current_path: &str, item_path: &str) -> bool {
+    current_path == item_path
+        || (item_path != "/"
+            && current_path
+                .strip_prefix(item_path)
+                .is_some_and(|suffix| suffix.starts_with('/')))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::nav_item_is_active;
+
+    #[test]
+    fn nested_console_routes_keep_their_parent_navigation_active() {
+        assert!(nav_item_is_active(
+            "/admin/monitoring/diagnostics",
+            "/admin/monitoring"
+        ));
+        assert!(nav_item_is_active("/admin/monitoring", "/admin/monitoring"));
+        assert!(!nav_item_is_active(
+            "/admin/monitoring-archive",
+            "/admin/monitoring"
+        ));
+        assert!(!nav_item_is_active("/dashboard", "/"));
     }
 }

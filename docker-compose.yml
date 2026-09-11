@@ -17,6 +17,11 @@
 #   cp .env.example .env   # 编辑填入生产密钥
 #   docker compose up -d   # 启动所有服务
 #   docker compose logs -f # 实时查看日志
+#
+# 安全参数准则：下方 change-me/空值仅用于开发示例。本编排启用 Redis，因此
+# 生产启动会拒绝默认 JWT、默认节点 HMAC、缺失或无效的 Provider API Key
+# 加密密钥；全新数据库还会拒绝默认管理员引导密码。数据库、Redis、SMTP 和
+# 支付示例凭据不会被应用统一拦截，生产部署仍须全部替换。
 # =============================================================================
 
 services:
@@ -31,7 +36,7 @@ services:
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-keycompute}
       POSTGRES_USER: ${POSTGRES_USER:-keycompute}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me-strong-password}
       # 性能调优（根据服务器内存酌情调整）
       POSTGRES_INITDB_ARGS: "--encoding=UTF-8 --lc-collate=C --lc-ctype=C"
     volumes:
@@ -59,7 +64,7 @@ services:
     restart: unless-stopped
     command: >
       redis-server
-      --requirepass ${REDIS_PASSWORD}
+      --requirepass ${REDIS_PASSWORD:-change-me-redis-password}
       --maxmemory 256mb
       --maxmemory-policy allkeys-lru
       --save 60 1000
@@ -69,7 +74,7 @@ services:
     networks:
       - keycompute-internal
     healthcheck:
-      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-change-me-redis-password}", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -96,52 +101,105 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      ollama-model-init:
+        condition: service_completed_successfully
     environment:
-      # 运行环境
-      KC__ENV: production
-
+      # release 镜像固定为生产模式，不使用运行模式变量
       # 数据库配置（使用 Docker 网络内服务名解析）
-      KC__DATABASE__URL: "postgres://${POSTGRES_USER:-keycompute}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-keycompute}"
-      KC__DATABASE__MAX_CONNECTIONS: ${DB_MAX_CONNECTIONS:-10}
-      KC__DATABASE__MIN_CONNECTIONS: ${DB_MIN_CONNECTIONS:-2}
+      KC__DATABASE__URL: "postgres://${POSTGRES_USER:-keycompute}:${POSTGRES_PASSWORD:-change-me-strong-password}@postgres:5432/${POSTGRES_DB:-keycompute}"
+      KC__DATABASE__MAX_CONNECTIONS: ${KC__DATABASE__MAX_CONNECTIONS:-${DB_MAX_CONNECTIONS:-10}}
+      KC__DATABASE__MIN_CONNECTIONS: ${KC__DATABASE__MIN_CONNECTIONS:-${DB_MIN_CONNECTIONS:-2}}
+      KC__DATABASE__CONNECT_TIMEOUT_SECS: ${KC__DATABASE__CONNECT_TIMEOUT_SECS:-30}
+      KC__DATABASE__IDLE_TIMEOUT_SECS: ${KC__DATABASE__IDLE_TIMEOUT_SECS:-600}
+      KC__DATABASE__MAX_LIFETIME_SECS: ${KC__DATABASE__MAX_LIFETIME_SECS:-1800}
 
       # Redis 配置
-      KC__REDIS__URL: "redis://:${REDIS_PASSWORD}@redis:6379"
-      KC__REDIS__POOL_SIZE: ${REDIS_POOL_SIZE:-10}
+      KC__REDIS__URL: "redis://:${REDIS_PASSWORD:-change-me-redis-password}@redis:6379"
+      KC__REDIS__POOL_SIZE: ${KC__REDIS__POOL_SIZE:-${REDIS_POOL_SIZE:-10}}
+      KC__REDIS__CONNECT_TIMEOUT_SECS: ${KC__REDIS__CONNECT_TIMEOUT_SECS:-5}
 
-      # 认证配置（生产环境必须修改！）
-      KC__AUTH__JWT_SECRET: ${KC__AUTH__JWT_SECRET}
+      # 认证配置（生产环境必须修改）
+      KC__AUTH__JWT_SECRET: ${KC__AUTH__JWT_SECRET:-change-me-in-production}
       KC__AUTH__JWT_ISSUER: ${KC__AUTH__JWT_ISSUER:-keycompute}
       KC__AUTH__JWT_EXPIRY_SECS: ${KC__AUTH__JWT_EXPIRY_SECS:-3600}
 
-      # 加密配置（API Key 加密存储，生产环境必须配置！）
-      KC__CRYPTO__SECRET_KEY: ${KC__CRYPTO__SECRET_KEY}
+      # 加密配置（生产环境必须配置；未配置时服务拒绝启动）
+      KC__CRYPTO__SECRET_KEY: ${KC__CRYPTO__SECRET_KEY:-}
 
-      # 邮件服务配置
-      KC__EMAIL__SMTP_HOST: ${KC__EMAIL__SMTP_HOST}
+      # 邮件服务配置（SMTP_HOST/USERNAME/PASSWORD/FROM_ADDRESS 留空时禁用）
+      KC__EMAIL__SMTP_HOST: ${KC__EMAIL__SMTP_HOST:-}
       KC__EMAIL__SMTP_PORT: ${KC__EMAIL__SMTP_PORT:-465}
-      KC__EMAIL__SMTP_USERNAME: ${KC__EMAIL__SMTP_USERNAME}
-      KC__EMAIL__SMTP_PASSWORD: ${KC__EMAIL__SMTP_PASSWORD}
-      KC__EMAIL__FROM_ADDRESS: ${KC__EMAIL__FROM_ADDRESS}
+      KC__EMAIL__SMTP_USERNAME: ${KC__EMAIL__SMTP_USERNAME:-}
+      KC__EMAIL__SMTP_PASSWORD: ${KC__EMAIL__SMTP_PASSWORD:-}
+      KC__EMAIL__FROM_ADDRESS: ${KC__EMAIL__FROM_ADDRESS:-}
       KC__EMAIL__FROM_NAME: ${KC__EMAIL__FROM_NAME:-KeyCompute}
-      APP_BASE_URL: ${APP_BASE_URL:-http://127.0.0.1}
+      KC__EMAIL__TIMEOUT_SECS: ${KC__EMAIL__TIMEOUT_SECS:-30}
+      KC__EMAIL__USE_TLS: ${KC__EMAIL__USE_TLS:-true}
+      KC__EMAIL__REQUIREMENT_RECIPIENT: ${KC__EMAIL__REQUIREMENT_RECIPIENT:-}
+      APP_BASE_URL: ${APP_BASE_URL:-}
+
+      # Gateway 配置
+      KC__GATEWAY__TIMEOUT_SECS: ${KC__GATEWAY__TIMEOUT_SECS:-120}
+      KC__GATEWAY__REQUEST_TIMEOUT_SECS: ${KC__GATEWAY__REQUEST_TIMEOUT_SECS:-120}
+      KC__GATEWAY__STREAM_TIMEOUT_SECS: ${KC__GATEWAY__STREAM_TIMEOUT_SECS:-600}
+      KC__GATEWAY__MAX_RETRIES: ${KC__GATEWAY__MAX_RETRIES:-3}
+      KC__GATEWAY__ENABLE_FALLBACK: ${KC__GATEWAY__ENABLE_FALLBACK:-true}
+      KC__GATEWAY__MONITORING_RAW_MAX_HOURS: ${KC__GATEWAY__MONITORING_RAW_MAX_HOURS:-24}
+      # 默认禁用自动真实推理探测；启用后会产生上游调用与费用
+      KC__GATEWAY__ACCOUNT_PROBE_INTERVAL_SECS: ${KC__GATEWAY__ACCOUNT_PROBE_INTERVAL_SECS:-0}
+      KC__GATEWAY__ACCOUNT_PROBE_CONCURRENCY: ${KC__GATEWAY__ACCOUNT_PROBE_CONCURRENCY:-4}
+
+      # 支付渠道密钥（仅由环境变量注入，不写入配置文件或数据库）
+      ALIPAY_APP_ID: ${ALIPAY_APP_ID:-}
+      ALIPAY_PRIVATE_KEY: ${ALIPAY_PRIVATE_KEY:-}
+      ALIPAY_PUBLIC_KEY: ${ALIPAY_PUBLIC_KEY:-}
+      ALIPAY_PREVIOUS_PUBLIC_KEYS_JSON: ${ALIPAY_PREVIOUS_PUBLIC_KEYS_JSON:-}
+      ALIPAY_ENV: ${ALIPAY_ENV:-production}
+      ALIPAY_NOTIFY_URL: ${ALIPAY_NOTIFY_URL:-}
+      ALIPAY_RETURN_URL: ${ALIPAY_RETURN_URL:-}
+      ALIPAY_TIMEOUT_MINUTES: ${ALIPAY_TIMEOUT_MINUTES:-30}
+      KC__PAYMENT__WECHATPAY__APPID: ${KC__PAYMENT__WECHATPAY__APPID:-${WECHATPAY_APP_ID:-}}
+      KC__PAYMENT__WECHATPAY__MCHID: ${KC__PAYMENT__WECHATPAY__MCHID:-${WECHATPAY_MCH_ID:-}}
+      KC__PAYMENT__WECHATPAY__MERCHANT_SERIAL_NO: ${KC__PAYMENT__WECHATPAY__MERCHANT_SERIAL_NO:-${WECHATPAY_MERCHANT_SERIAL_NO:-}}
+      KC__PAYMENT__WECHATPAY__MERCHANT_PRIVATE_KEY: ${KC__PAYMENT__WECHATPAY__MERCHANT_PRIVATE_KEY:-${WECHATPAY_MERCHANT_PRIVATE_KEY:-}}
+      KC__PAYMENT__WECHATPAY__API_V3_KEY: ${KC__PAYMENT__WECHATPAY__API_V3_KEY:-${WECHATPAY_API_V3_KEY:-}}
+      KC__PAYMENT__WECHATPAY__WECHATPAY_PUBLIC_KEY_ID: ${KC__PAYMENT__WECHATPAY__WECHATPAY_PUBLIC_KEY_ID:-${WECHATPAY_PUBLIC_KEY_ID:-}}
+      KC__PAYMENT__WECHATPAY__WECHATPAY_PUBLIC_KEY: ${KC__PAYMENT__WECHATPAY__WECHATPAY_PUBLIC_KEY:-${WECHATPAY_PUBLIC_KEY:-}}
+      KC__PAYMENT__WECHATPAY__PREVIOUS_CALLBACK_KEYS_JSON: ${KC__PAYMENT__WECHATPAY__PREVIOUS_CALLBACK_KEYS_JSON:-${WECHATPAY_PREVIOUS_CALLBACK_KEYS_JSON:-}}
+      KC__PAYMENT__WECHATPAY__NOTIFY_URL: ${KC__PAYMENT__WECHATPAY__NOTIFY_URL:-${WECHATPAY_NOTIFY_URL:-}}
+      KC__PAYMENT__WECHATPAY__TIMEOUT_MINUTES: ${KC__PAYMENT__WECHATPAY__TIMEOUT_MINUTES:-${WECHATPAY_TIMEOUT_MINUTES:-15}}
 
       # 服务器配置
       KC__SERVER__BIND_ADDR: "0.0.0.0"
       KC__SERVER__PORT: "3000"
 
-      # 默认系统管理员配置（首次启动时自动创建）
+      # 默认系统管理员配置（仅首次创建 system 管理员时使用；创建后可删除密码变量）
       KC__DEFAULT_ADMIN_EMAIL: ${KC__DEFAULT_ADMIN_EMAIL:-admin@keycompute.local}
-      KC__DEFAULT_ADMIN_PASSWORD: ${KC__DEFAULT_ADMIN_PASSWORD:-12345}
+      KC__DEFAULT_ADMIN_PASSWORD: ${KC__DEFAULT_ADMIN_PASSWORD:-}
+
+      # 节点网关配置（Node Gateway）
+      # 生产环境必须修改 REGISTRATION_TOKEN_SECRET
+      KC__NODE_GATEWAY__REGISTRATION_TOKEN_SECRET: ${KC__NODE_GATEWAY__REGISTRATION_TOKEN_SECRET:-change-me-node-registration-token-secret}
+      KC__NODE_GATEWAY__SESSION_TTL_SECS: ${KC__NODE_GATEWAY__SESSION_TTL_SECS:-300}
+      KC__NODE_GATEWAY__HEARTBEAT_INTERVAL_SECS: ${KC__NODE_GATEWAY__HEARTBEAT_INTERVAL_SECS:-30}
+      KC__NODE_GATEWAY__POLL_TIMEOUT_SECS: ${KC__NODE_GATEWAY__POLL_TIMEOUT_SECS:-30}
+      KC__NODE_GATEWAY__TASK_DEADLINE_SECS: ${KC__NODE_GATEWAY__TASK_DEADLINE_SECS:-120}
+      KC__NODE_GATEWAY__COMPLETE_GRACE_SECS: ${KC__NODE_GATEWAY__COMPLETE_GRACE_SECS:-60}
+      KC__NODE_GATEWAY__NODE_FAILURE_THRESHOLD: ${KC__NODE_GATEWAY__NODE_FAILURE_THRESHOLD:-3}
+      KC__NODE_GATEWAY__TASK_FAILURE_THRESHOLD: ${KC__NODE_GATEWAY__TASK_FAILURE_THRESHOLD:-3}
+      KC__NODE_GATEWAY__SWEEPER_HEARTBEAT_TTL_SECS: ${KC__NODE_GATEWAY__SWEEPER_HEARTBEAT_TTL_SECS:-600}
+      KC__NODE_GATEWAY__SWEEPER_REPUSH_INTERVAL_SECS: ${KC__NODE_GATEWAY__SWEEPER_REPUSH_INTERVAL_SECS:-10}
     networks:
-      - keycompute-internal
+      # keycompute-public 必须在 keycompute-internal 之前，确保默认路由
+      # 走 public 网络（有外网访问），否则后端无法下载外部图片 URL
       - keycompute-public
+      - keycompute-internal
     # 后端端口不对外直接暴露，通过 Nginx 代理访问
     # 如需直接调试 API，可取消下行注释：
     # ports:
     #   - "3000:3000"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:3000/health"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -159,6 +217,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.web
+      args:
+        API_BASE_URL: ${API_BASE_URL:-}
     pull_policy: build
     image: keycompute-web:latest
     container_name: keycompute-web
@@ -172,7 +232,7 @@ services:
       - keycompute-public
       - keycompute-internal  # Nginx 需要访问 keycompute-server，必须加入内部网络
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost/"]
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -194,8 +254,10 @@ services:
       OLLAMA_HOST: "0.0.0.0:11434"
       # 控制模型在内存中的保活时间；如需常驻可在 .env 中设为 -1
       OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:-30m}
-    ports:
-      - "${OLLAMA_PORT:-11434}:11434"
+    # 端口不暴露到宿主机，keycompute-server 通过 Docker 内部 DNS (ollama:11434) 访问
+    # 如需从宿主机直接调试，可取消下行注释：
+    # ports:
+    #   - "${OLLAMA_PORT:-11434}:11434"
     volumes:
       - ollama_data:/root/.ollama
     networks:
@@ -244,6 +306,9 @@ volumes:
 # =============================================================================
 networks:
   # 内部网络：Postgres/Redis/Server 之间通信，外部不可访问
+  # internal: true 是安全设计——防止该网络上的容器意外访问外网
+  # 需要外网访问的服务（如 keycompute-server 下载外部图片）
+  # 必须同时接入 keycompute-public 且将其排在 networks 列表第一位
   keycompute-internal:
     driver: bridge
     internal: true

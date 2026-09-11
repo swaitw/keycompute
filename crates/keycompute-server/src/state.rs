@@ -2,17 +2,135 @@
 //!
 //! AppState 定义（DB Pool, Redis, 各模块 Handle）
 
-use keycompute_auth::{AuthService, EmailService, JwtValidator, ProduceAiKeyValidator};
+use keycompute_auth::{
+    AuthService, EmailService, JwtValidator, ProduceAiKeyValidator, UserService,
+};
 use keycompute_billing::BillingService;
+use keycompute_cache::CacheService;
+use keycompute_db::DbRouter;
 use keycompute_emailserver::EmailConfig;
-use keycompute_provider_trait::ProviderAdapter;
 use keycompute_routing::{AccountStateStore, ProviderHealthStore, RoutingEngine};
 use keycompute_runtime::set_global_crypto;
+use keycompute_types::{NoopRequestLifecycleRecorder, RequestLifecycleRecorder};
 use llm_gateway::{GatewayBuilder, GatewayExecutor, HttpProxy, ProxyConfig as HttpProxyConfig};
-use sqlx::PgPool;
+use llm_protocol_provider::ProviderAdapter;
+use node_gateway::{NodeGatewayService, PostgresNodeIndex};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 use std::time::Duration;
+use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore};
+
+// Each connection may retain up to roughly 384 MiB across its request queue,
+// continuation cache, and outbound queue. Keep worst cases bounded;
+// clients can multiplex concurrent response.create events on one connection.
+const RESPONSES_WEBSOCKET_GLOBAL_LIMIT: usize = 4;
+const RESPONSES_WEBSOCKET_PER_TENANT_LIMIT: usize = 2;
+
+/// Affinity between an OpenAI `resp_*`/`conv_*` resource and the provider
+/// account that owns it. The same value is kept in memory and Redis so chained
+/// requests and resource operations work across KeyCompute replicas.
+#[derive(Debug, Clone, Serialize, Deserialize, sea_orm::FromQueryResult, PartialEq, Eq)]
+pub(crate) struct ResponsesAffinity {
+    pub tenant_id: uuid::Uuid,
+    pub provider: String,
+    #[serde(default)]
+    pub model: Option<String>,
+    pub account_id: uuid::Uuid,
+    pub expires_at_unix: i64,
+}
+
+pub(crate) type ResponsesAffinityMap = tokio::sync::RwLock<HashMap<String, ResponsesAffinity>>;
+
+const GENERATION_LARGE_HTTP_BODY_CONCURRENCY: usize = 2;
+pub(crate) const GENERATION_LARGE_HTTP_BODY_BYTES: u64 = 4 * 1024 * 1024;
+
+/// Permit inserted before Axum buffers a large generation API request. The
+/// cloneable wrapper lets an extractor hand ownership to the response worker,
+/// which retains it while the large request body remains resident.
+#[derive(Debug, Clone)]
+pub struct GenerationHttpBodyPermit {
+    _permit: Arc<OwnedSemaphorePermit>,
+}
+
+#[derive(Debug)]
+pub(crate) struct GenerationHttpBodyAdmission {
+    slots: Arc<Semaphore>,
+}
+
+impl GenerationHttpBodyAdmission {
+    fn default_limit() -> Self {
+        Self {
+            slots: Arc::new(Semaphore::new(GENERATION_LARGE_HTTP_BODY_CONCURRENCY)),
+        }
+    }
+
+    pub(crate) fn try_acquire(&self) -> Option<GenerationHttpBodyPermit> {
+        Arc::clone(&self.slots)
+            .try_acquire_owned()
+            .ok()
+            .map(|permit| GenerationHttpBodyPermit {
+                _permit: Arc::new(permit),
+            })
+    }
+}
+
+/// Process-wide admission control for long-lived Responses WebSocket
+/// connections. Per-event RPM/TPM checks still happen in the handler; these
+/// permits bound resident connection state and prevent one tenant from
+/// consuming every available socket.
+#[derive(Debug)]
+pub(crate) struct ResponsesWebSocketAdmission {
+    global: Arc<Semaphore>,
+    per_tenant_limit: usize,
+    tenants: Mutex<HashMap<uuid::Uuid, Weak<Semaphore>>>,
+}
+
+#[derive(Debug)]
+pub(crate) struct ResponsesWebSocketPermit {
+    _global: OwnedSemaphorePermit,
+    _tenant: OwnedSemaphorePermit,
+}
+
+impl ResponsesWebSocketAdmission {
+    fn default_limits() -> Self {
+        Self::with_limits(
+            RESPONSES_WEBSOCKET_GLOBAL_LIMIT,
+            RESPONSES_WEBSOCKET_PER_TENANT_LIMIT,
+        )
+    }
+
+    pub(crate) fn with_limits(global_limit: usize, per_tenant_limit: usize) -> Self {
+        Self {
+            global: Arc::new(Semaphore::new(global_limit)),
+            per_tenant_limit,
+            tenants: Mutex::new(HashMap::new()),
+        }
+    }
+
+    pub(crate) async fn try_acquire(
+        &self,
+        tenant_id: uuid::Uuid,
+    ) -> Option<ResponsesWebSocketPermit> {
+        let global = Arc::clone(&self.global).try_acquire_owned().ok()?;
+        let tenant = {
+            let mut tenants = self.tenants.lock().await;
+            tenants.retain(|_, semaphore| semaphore.strong_count() > 0);
+            if let Some(semaphore) = tenants.get(&tenant_id).and_then(Weak::upgrade) {
+                semaphore
+            } else {
+                let semaphore = Arc::new(Semaphore::new(self.per_tenant_limit));
+                tenants.insert(tenant_id, Arc::downgrade(&semaphore));
+                semaphore
+            }
+        };
+        let tenant = tenant.try_acquire_owned().ok()?;
+        Some(ResponsesWebSocketPermit {
+            _global: global,
+            _tenant: tenant,
+        })
+    }
+}
 
 /// 限流后端配置
 #[derive(Debug, Clone, Default)]
@@ -21,7 +139,11 @@ pub enum RateLimitBackendConfig {
     #[default]
     Memory,
     /// Redis 后端
-    Redis { url: String },
+    Redis {
+        url: String,
+        pool_size: usize,
+        connect_timeout: Duration,
+    },
 }
 
 /// JWT 配置
@@ -58,16 +180,20 @@ pub struct AppStateConfig {
     pub gateway: keycompute_config::GatewayConfig,
     /// 邮件服务配置
     pub email: EmailConfig,
+    /// 节点网关配置（可选）
+    pub node_gateway: Option<keycompute_config::NodeGatewayConfig>,
 }
 
 impl AppStateConfig {
     /// 从 keycompute_config::AppConfig 创建
     pub fn from_config(config: &keycompute_config::AppConfig) -> Self {
         Self {
-            app_base_url: Some(config.resolved_app_base_url()),
+            app_base_url: config.resolved_app_base_url(),
             rate_limit: if let Some(redis) = &config.redis {
                 RateLimitBackendConfig::Redis {
                     url: redis.url.clone(),
+                    pool_size: redis.pool_size as usize,
+                    connect_timeout: Duration::from_secs(redis.connect_timeout_secs),
                 }
             } else {
                 RateLimitBackendConfig::Memory
@@ -79,6 +205,7 @@ impl AppStateConfig {
             },
             gateway: config.gateway.clone(),
             email: config.email.clone(),
+            node_gateway: config.node_gateway.clone(),
         }
     }
 }
@@ -90,30 +217,43 @@ impl AppStateConfig {
 ///
 /// # 参数
 /// - `config`: 应用配置
+/// - `is_production`: 是否为非开发环境；生产环境缺失密钥时直接返回错误
 ///
 /// # 返回
-/// - `Ok(())`: 成功初始化或无加密配置
-/// - `Err(...)`: 密钥格式错误
+/// - `Ok(())`: 成功初始化，或开发环境未配置密钥并回退到明文存储
+/// - `Err(...)`: 生产环境缺失密钥，或已提供的密钥格式错误
 ///
 /// # 示例
 /// ```rust,ignore
-/// let config = AppConfig::load()?;
-/// init_global_crypto(&config)?;
+/// let config = AppConfig::load_development()?;
+/// init_global_crypto(&config, false)?;
 /// let state = AppState::with_config(AppStateConfig::from_config(&config));
 /// ```
-pub fn init_global_crypto(config: &keycompute_config::AppConfig) -> crate::error::Result<()> {
-    if let Some(crypto) = &config.crypto {
-        if let Some(key) = crypto.secret_key() {
-            set_global_crypto(key).map_err(|e| {
-                crate::error::ApiError::Config(format!("Failed to set global crypto key: {}", e))
-            })?;
-            tracing::info!("Global crypto key initialized from config");
+pub fn init_global_crypto(
+    config: &keycompute_config::AppConfig,
+    is_production: bool,
+) -> crate::error::Result<()> {
+    let key = config
+        .crypto
+        .as_ref()
+        .filter(|crypto| crypto.has_key())
+        .and_then(|crypto| crypto.secret_key());
+
+    let Some(key) = key else {
+        if is_production {
+            return Err(crate::error::ApiError::Config(
+                "KC__CRYPTO__SECRET_KEY is required in production; refusing plaintext Provider API key storage".to_string(),
+            ));
         } else {
-            tracing::info!("No crypto key configured, upstream API keys will be used as plaintext");
+            tracing::warn!("未配置 KC__CRYPTO__SECRET_KEY，Provider API Key 将以明文存储");
         }
-    } else {
-        tracing::info!("No crypto config found, upstream API keys will be used as plaintext");
-    }
+        return Ok(());
+    };
+
+    set_global_crypto(key).map_err(|e| {
+        crate::error::ApiError::Config(format!("Failed to set global crypto key: {}", e))
+    })?;
+    tracing::info!("Global crypto key initialized from config");
     Ok(())
 }
 
@@ -123,7 +263,7 @@ pub struct AppState {
     /// 对外公开的前端应用基础 URL（可选）
     pub app_base_url: Option<String>,
     /// 数据库连接池（可选）
-    pub pool: Option<Arc<PgPool>>,
+    pub pool: Option<Arc<DbRouter>>,
     /// 认证服务
     pub auth: Arc<AuthService>,
     /// 限流服务
@@ -146,17 +286,31 @@ pub struct AppState {
     pub email_service: Arc<EmailService>,
     /// 公共注册 cookie 签名密钥
     pub public_auth_cookie_secret: Arc<String>,
-    /// 支付服务（可选）
-    pub payment: Option<Arc<keycompute_alipay::PaymentService>>,
+    /// 统一支付渠道注册表（可选）
+    pub payment: Option<Arc<crate::payment_registry::PaymentRegistry>>,
+    /// 节点网关服务（可选）
+    pub node_gateway: Option<Arc<NodeGatewayService>>,
+    /// 统一缓存服务（Redis 不可用时自动降级为 no-op）
+    pub cache: Arc<CacheService>,
+    /// Process-local fallback for Responses resource affinity. Redis mirrors
+    /// these entries when configured; the local map keeps the API functional
+    /// in installations intentionally running without Redis.
+    pub(crate) responses_affinity: Arc<ResponsesAffinityMap>,
+    /// Admission control for long-lived Responses WebSocket connections.
+    pub(crate) responses_websocket_admission: Arc<ResponsesWebSocketAdmission>,
+    /// Bounds concurrently resident large generation API request bodies.
+    pub(crate) generation_http_body_admission: Arc<GenerationHttpBodyAdmission>,
     /// Gateway 配置
     pub gateway_config: keycompute_config::GatewayConfig,
+    /// Best-effort lifecycle tracing sink.
+    pub lifecycle: Arc<dyn RequestLifecycleRecorder>,
 }
 
 impl std::fmt::Debug for AppState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AppState")
             .field("app_base_url", &self.app_base_url)
-            .field("pool", &self.pool.as_ref().map(|_| "PgPool"))
+            .field("pool", &self.pool.as_ref().map(|_| "DbRouter"))
             .field("auth", &"<AuthService>")
             .field("rate_limiter", &"<RateLimitService>")
             .field("pricing", &"<PricingService>")
@@ -172,7 +326,22 @@ impl std::fmt::Debug for AppState {
                 "payment",
                 &self.payment.as_ref().map(|_| "<PaymentService>"),
             )
+            .field(
+                "node_gateway",
+                &self.node_gateway.as_ref().map(|_| "<NodeGatewayService>"),
+            )
+            .field("cache", &"<CacheService>")
+            .field("responses_affinity", &"<ResponsesAffinityMap>")
+            .field(
+                "responses_websocket_admission",
+                &"<ResponsesWebSocketAdmission>",
+            )
+            .field(
+                "generation_http_body_admission",
+                &"<GenerationHttpBodyAdmission>",
+            )
             .field("gateway_config", &self.gateway_config)
+            .field("lifecycle", &"<RequestLifecycleRecorder>")
             .finish()
     }
 }
@@ -183,7 +352,11 @@ impl AppState {
         Self::with_config(AppStateConfig::default())
     }
 
-    /// 创建带配置的应用状态（无数据库连接）
+    /// 创建带配置的应用状态（无数据库连接）。
+    ///
+    /// # Panics
+    /// Panics when an explicitly selected backend cannot be initialized. The
+    /// production entry point uses the asynchronous fallible constructor.
     pub fn with_config(config: AppStateConfig) -> Self {
         // 创建 API Key 验证器
         let api_key_validator = ProduceAiKeyValidator::new();
@@ -217,7 +390,9 @@ impl AppState {
         ));
 
         // 创建 Gateway 执行器，使用 providers 模块统一的 Provider 列表
-        let mut gateway_builder = GatewayBuilder::new().with_http_proxy(Arc::clone(&http_proxy));
+        let mut gateway_builder = GatewayBuilder::new()
+            .with_config(Self::gateway_executor_config(&config.gateway))
+            .with_http_proxy(Arc::clone(&http_proxy));
         for (name, adapter) in crate::providers::get_provider_adapters() {
             gateway_builder = gateway_builder.add_provider(name, adapter);
         }
@@ -227,7 +402,14 @@ impl AppState {
         let billing = Arc::new(BillingService::new());
 
         // 根据配置创建限流服务
-        let rate_limiter = Self::create_rate_limiter(&config.rate_limit);
+        let rate_limiter = Self::create_rate_limiter(&config.rate_limit)
+            .expect("configured rate-limit backend must initialize");
+
+        // 创建缓存服务（降级为 no-op，因为无 Redis 连接池）
+        let cache = Self::create_disabled_cache();
+
+        // 将 PricingService 接入分布式缓存（确保代码路径覆盖）
+        let pricing_service = pricing_service.with_dist_cache(Arc::clone(&cache));
 
         // 创建邮件服务
         let email_service = Arc::new(EmailService::new(config.email));
@@ -248,46 +430,85 @@ impl AppState {
             billing,
             email_service,
             public_auth_cookie_secret,
-            payment: None, // 支付服务需要数据库连接
+            payment: None,      // 支付服务需要数据库连接
+            node_gateway: None, // 节点网关需要数据库连接和 Redis
+            cache,
+            responses_affinity: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
+            responses_websocket_admission: Arc::new(ResponsesWebSocketAdmission::default_limits()),
+            generation_http_body_admission: Arc::new(GenerationHttpBodyAdmission::default_limit()),
             gateway_config: config.gateway,
+            lifecycle: Arc::new(NoopRequestLifecycleRecorder),
+        }
+    }
+
+    /// 创建 disabled 缓存服务（总是 no-op 降级，无需 Redis 连接池）
+    fn create_disabled_cache() -> Arc<CacheService> {
+        tracing::info!("Cache service disabled");
+        Arc::new(CacheService::disabled())
+    }
+
+    /// 创建缓存服务（Redis pool available 时使用共享连接池，否则 no-op 降级）
+    #[cfg(feature = "redis")]
+    fn create_cache_service(pool: Option<deadpool_redis::Pool>) -> Arc<CacheService> {
+        match pool {
+            Some(pool) => {
+                tracing::info!("Cache service using shared Redis backend");
+                Arc::new(CacheService::with_pool(pool))
+            }
+            None => {
+                tracing::info!("Cache service disabled (Redis pool unavailable)");
+                Arc::new(CacheService::disabled())
+            }
         }
     }
 
     /// 根据配置创建限流服务
     ///
-    /// 如果 Redis 后端创建失败，会优雅降级到内存后端，
-    /// 确保应用不会因为 Redis 不可用而无法启动。
+    /// An explicitly configured Redis backend is a correctness dependency for
+    /// distributed rate limiting. Initialization therefore fails closed; only
+    /// an explicit `Memory` configuration may construct the in-memory backend.
     fn create_rate_limiter(
         config: &RateLimitBackendConfig,
-    ) -> keycompute_ratelimit::RateLimitService {
+    ) -> crate::error::Result<keycompute_ratelimit::RateLimitService> {
         match config {
             RateLimitBackendConfig::Memory => {
-                keycompute_ratelimit::RateLimitService::default_memory()
+                Ok(keycompute_ratelimit::RateLimitService::default_memory())
             }
             #[cfg(feature = "redis")]
-            RateLimitBackendConfig::Redis { url } => {
-                match keycompute_ratelimit::RateLimitService::new_redis(url) {
-                    Ok(service) => {
-                        tracing::info!(redis_url = %url, "Redis rate limiter initialized successfully");
-                        service
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            redis_url = %url,
-                            error = %e,
-                            "Failed to create Redis rate limiter, falling back to memory backend"
-                        );
-                        keycompute_ratelimit::RateLimitService::default_memory()
-                    }
-                }
-            }
+            RateLimitBackendConfig::Redis {
+                url,
+                pool_size,
+                connect_timeout,
+            } => keycompute_runtime::redis_store::RedisRuntimeStore::create_pool_with_options(
+                url,
+                *pool_size,
+                *connect_timeout,
+            )
+            .map(|pool| {
+                tracing::info!("Redis rate limiter pool initialized successfully");
+                keycompute_ratelimit::RateLimitService::with_redis_pool(pool)
+            })
+            .map_err(|error| {
+                crate::error::ApiError::Config(format!(
+                    "configured Redis rate limiter could not initialize: {error}"
+                ))
+            }),
             #[cfg(not(feature = "redis"))]
-            RateLimitBackendConfig::Redis { .. } => {
-                tracing::warn!(
-                    "Redis backend requested but redis feature is not enabled, falling back to memory backend"
-                );
-                keycompute_ratelimit::RateLimitService::default_memory()
-            }
+            RateLimitBackendConfig::Redis { .. } => Err(crate::error::ApiError::Config(
+                "Redis rate limiter is configured, but this server was built without Redis support"
+                    .to_string(),
+            )),
+        }
+    }
+
+    fn gateway_executor_config(
+        gateway_config: &keycompute_config::GatewayConfig,
+    ) -> llm_gateway::GatewayConfig {
+        llm_gateway::GatewayConfig {
+            max_retries: gateway_config.max_retries,
+            timeout_secs: gateway_config.timeout_secs,
+            stream_timeout_secs: gateway_config.stream_timeout_secs,
+            enable_fallback: gateway_config.enable_fallback,
         }
     }
 
@@ -302,46 +523,129 @@ impl AppState {
             .with_stream_timeout(Duration::from_secs(gateway_config.stream_timeout_secs));
 
         if let Some(proxy) = proxy_config {
-            // 有代理配置，创建带代理的 HttpProxy
-            let mut proxies = proxy.providers.clone();
+            // Build each rule into its native selector tier. Encoding account
+            // and pattern rules into the provider map leaves them unreachable.
+            let mut http_proxy = HttpProxy::new(http_proxy_config);
+            for (provider, url) in &proxy.providers {
+                http_proxy.add_proxy(provider.clone(), url.clone());
+            }
 
-            // 添加通配符规则
             if let Some(patterns) = &proxy.patterns {
                 for (pattern, url) in patterns {
-                    // 通配符规则以 pattern: 为前缀存储
-                    proxies.insert(format!("pattern:{}", pattern), url.clone());
+                    http_proxy.add_pattern(pattern.clone(), url.clone());
                 }
             }
 
-            // 添加账号级代理
             if let Some(accounts) = &proxy.accounts {
                 for (key, url) in accounts {
-                    // 账号级代理以 account: 为前缀存储
-                    proxies.insert(format!("account:{}", key), url.clone());
+                    let Some((provider, account_id)) = key.rsplit_once(':') else {
+                        tracing::warn!(proxy_account_key=%key, "ignoring invalid account proxy key");
+                        continue;
+                    };
+                    let Ok(account_id) = uuid::Uuid::parse_str(account_id) else {
+                        tracing::warn!(proxy_account_key=%key, "ignoring invalid account proxy UUID");
+                        continue;
+                    };
+                    http_proxy.add_account_proxy(provider.to_string(), account_id, url.clone());
                 }
             }
-
-            HttpProxy::with_proxies(http_proxy_config, proxies)
+            http_proxy
         } else {
             // 无代理配置，使用默认 HttpProxy
             HttpProxy::new(http_proxy_config)
         }
     }
 
-    /// 创建带数据库连接的应用状态（使用默认配置）
-    pub fn with_pool(pool: Arc<PgPool>) -> Self {
-        Self::with_pool_and_config(pool, AppStateConfig::default())
+    /// 创建 Node Gateway 服务
+    ///
+    /// 使用已有 Redis 连接池创建，与限流服务共享同一连接池。
+    /// 仅在启用 `redis` feature 时可用。
+    #[cfg(feature = "redis")]
+    fn create_node_gateway_with_pool(
+        router: &Arc<DbRouter>,
+        redis_pool: deadpool_redis::Pool,
+        node_config: Option<keycompute_config::NodeGatewayConfig>,
+    ) -> Result<NodeGatewayService, anyhow::Error> {
+        use keycompute_runtime::redis_store::RedisRuntimeStore;
+        use node_gateway::{NodeGatewayAppConfig, NodeGatewayRedis, NodeGatewayStore};
+
+        // 使用已有连接池创建 Redis 存储（与限流服务共享连接池）
+        let redis_store = Arc::new(RedisRuntimeStore::with_pool(redis_pool));
+
+        // 创建节点网关配置。缺失的安全密钥使用可运行的示例值并记录安全建议。
+        let config = NodeGatewayAppConfig::from_config(&node_config.unwrap_or_default());
+
+        // 创建 Store 和 Redis 实例
+        let store = NodeGatewayStore::new(Arc::clone(router), config.clone());
+        let redis = NodeGatewayRedis::new(redis_store);
+
+        // 创建 NodeGatewayService
+        Ok(NodeGatewayService::new(store, redis, config))
     }
 
-    /// 创建带数据库连接和自定义配置的应用状态
-    pub fn with_pool_and_config(pool: Arc<PgPool>, config: AppStateConfig) -> Self {
+    /// 创建带数据库连接的应用状态（使用默认配置）
+    pub fn with_pool(pool: Arc<DbRouter>) -> Self {
+        Self::build_with_pool_and_config(pool, AppStateConfig::default())
+            .expect("default in-memory rate-limit backend must initialize")
+    }
+
+    /// Create application state and verify that an explicitly configured
+    /// distributed rate-limit backend is reachable before any route opens.
+    pub async fn try_with_pool_and_config(
+        pool: Arc<DbRouter>,
+        config: AppStateConfig,
+    ) -> crate::error::Result<Self> {
+        let requires_redis = matches!(&config.rate_limit, RateLimitBackendConfig::Redis { .. });
+        let state = Self::build_with_pool_and_config(pool, config)?;
+        if requires_redis {
+            if state.rate_limiter.backend() != keycompute_ratelimit::RateLimitBackend::Redis {
+                return Err(crate::error::ApiError::Config(
+                    "configured Redis rate limiter was not installed".to_string(),
+                ));
+            }
+            let health_key = keycompute_ratelimit::RateLimitKey::new(
+                uuid::Uuid::nil(),
+                uuid::Uuid::nil(),
+                uuid::Uuid::nil(),
+            );
+            state
+                .rate_limiter
+                .get_rpm_count(&health_key)
+                .await
+                .map_err(|error| {
+                    crate::error::ApiError::Config(format!(
+                        "configured Redis rate limiter is unreachable: {error}"
+                    ))
+                })?;
+            state
+                .rate_limiter
+                .get_tpm_count(&health_key)
+                .await
+                .map_err(|error| {
+                    crate::error::ApiError::Config(format!(
+                        "configured Redis TPM limiter is unavailable: {error}"
+                    ))
+                })?;
+        }
+        Ok(state)
+    }
+
+    fn build_with_pool_and_config(
+        pool: Arc<DbRouter>,
+        config: AppStateConfig,
+    ) -> crate::error::Result<Self> {
         // 创建带数据库连接的 API Key 验证器
         let api_key_validator = ProduceAiKeyValidator::with_pool(Arc::clone(&pool));
         // 创建 JWT 验证器
         let jwt_validator = JwtValidator::new(&config.jwt.secret, &config.jwt.issuer)
             .with_expiration(config.jwt.expiry_secs);
-        // 创建 AuthService，同时支持 API Key 和 JWT 认证
-        let auth_service = AuthService::new(api_key_validator).with_jwt(jwt_validator);
+        // 创建 AuthService，同时支持 API Key 和 JWT 认证。
+        // 关键：注入带数据库连接的 UserService，使 verify_token 能对 JWT 的
+        // token_version 做数据库比对——否则密码重置/登出后的旧 access token
+        // 仍能通过认证，token_version 失效机制形同虚设。
+        let auth_service = AuthService::new(api_key_validator)
+            .with_jwt(jwt_validator)
+            .with_user_service(UserService::with_pool(Arc::clone(&pool)));
 
         // 创建带数据库连接的定价服务
         let pricing_service = keycompute_pricing::PricingService::with_pool(Arc::clone(&pool));
@@ -353,12 +657,16 @@ impl AppState {
         // 获取 Provider 名称列表（与 Gateway 使用一致的列表）
         let provider_names = crate::providers::get_provider_names();
 
-        // 创建带数据库连接的路由引擎
-        let routing_engine = Arc::new(RoutingEngine::with_pool(
+        // 创建 Node 能力索引
+        let node_index = Arc::new(PostgresNodeIndex::new(Arc::clone(&pool)));
+
+        // 创建带数据库连接和 Node 能力索引的路由引擎
+        let routing_engine = Arc::new(RoutingEngine::with_node_index(
             Arc::clone(&account_states),
             Arc::clone(&provider_health),
             Arc::clone(&pool),
             provider_names,
+            node_index,
         ));
 
         // 创建 Internal HTTP Proxy（统一上游连接管理，支持配置）
@@ -368,7 +676,9 @@ impl AppState {
         ));
 
         // 创建 Gateway 执行器，使用 providers 模块统一的 Provider 列表
-        let mut gateway_builder = GatewayBuilder::new().with_http_proxy(Arc::clone(&http_proxy));
+        let mut gateway_builder = GatewayBuilder::new()
+            .with_config(Self::gateway_executor_config(&config.gateway))
+            .with_http_proxy(Arc::clone(&http_proxy));
         for (name, adapter) in crate::providers::get_provider_adapters() {
             gateway_builder = gateway_builder.add_provider(name, adapter);
         }
@@ -377,35 +687,104 @@ impl AppState {
         // 创建带数据库连接的计费服务
         let billing = Arc::new(BillingService::with_pool(Arc::clone(&pool)));
 
-        // 根据配置创建限流服务
-        let rate_limiter = Self::create_rate_limiter(&config.rate_limit);
+        let database: Arc<dyn RequestLifecycleRecorder> = Arc::new(
+            keycompute_db::PostgresRequestLifecycleRecorder::new(Arc::clone(&pool)),
+        );
+        let lifecycle: Arc<dyn RequestLifecycleRecorder> =
+            Arc::new(crate::lifecycle_metrics::MetricsRequestLifecycleRecorder::new(database));
+
+        #[cfg(feature = "redis")]
+        let (rate_limiter, node_gateway, cache) = {
+            let shared_redis_pool = match &config.rate_limit {
+                RateLimitBackendConfig::Redis {
+                    url,
+                    pool_size,
+                    connect_timeout,
+                } => Some(
+                    keycompute_runtime::redis_store::RedisRuntimeStore::create_pool_with_options(
+                        url,
+                        *pool_size,
+                        *connect_timeout,
+                    )
+                    .map_err(|error| {
+                        crate::error::ApiError::Config(format!(
+                            "configured shared Redis pool could not initialize: {error}"
+                        ))
+                    })?,
+                ),
+                _ => None,
+            };
+
+            let rate_limiter = match &shared_redis_pool {
+                Some(pool) => {
+                    tracing::info!("Rate limiter using shared Redis backend");
+                    keycompute_ratelimit::RateLimitService::with_redis_pool(pool.clone())
+                }
+                None => {
+                    tracing::info!("Rate limiter using explicitly configured memory backend");
+                    keycompute_ratelimit::RateLimitService::default_memory()
+                }
+            };
+
+            let node_gateway = match &shared_redis_pool {
+                Some(redis_pool) => {
+                    let node_config = config.node_gateway.clone();
+                    match Self::create_node_gateway_with_pool(
+                        &pool,
+                        redis_pool.clone(),
+                        node_config,
+                    ) {
+                        Ok(service) => {
+                            tracing::info!("Node gateway service initialized successfully");
+                            Some(Arc::new(service.with_lifecycle(Arc::clone(&lifecycle))))
+                        }
+                        Err(e) => {
+                            tracing::warn!("Failed to initialize node gateway service: {}", e);
+                            None
+                        }
+                    }
+                }
+                None => {
+                    tracing::info!("Node gateway requires Redis backend, skipping initialization");
+                    None
+                }
+            };
+
+            let cache = Self::create_cache_service(shared_redis_pool);
+
+            (rate_limiter, node_gateway, cache)
+        };
+
+        #[cfg(not(feature = "redis"))]
+        let (rate_limiter, node_gateway, cache) = {
+            if matches!(&config.rate_limit, RateLimitBackendConfig::Redis { .. }) {
+                return Err(crate::error::ApiError::Config(
+                    "Redis rate limiter is configured, but this server was built without Redis support"
+                        .to_string(),
+                ));
+            }
+            tracing::info!("Using explicitly configured memory rate limiter");
+            (
+                keycompute_ratelimit::RateLimitService::default_memory(),
+                None,
+                Self::create_disabled_cache(),
+            )
+        };
+
+        // 将 PricingService 接入分布式缓存（L2 防击穿）
+        let pricing_service = pricing_service.with_dist_cache(Arc::clone(&cache));
 
         // 创建邮件服务
         let email_service = Arc::new(EmailService::new(config.email));
         let public_auth_cookie_secret =
             Arc::new(format!("{}:public-auth-cookie", config.jwt.secret));
 
-        // 尝试初始化支付服务
-        let payment = match keycompute_alipay::AlipayConfig::from_env() {
-            Ok(alipay_config) => {
-                match keycompute_alipay::PaymentService::new(alipay_config, (*pool).clone()) {
-                    Ok(service) => {
-                        tracing::info!("Payment service initialized successfully");
-                        Some(Arc::new(service))
-                    }
-                    Err(e) => {
-                        tracing::warn!("Failed to initialize payment service: {}", e);
-                        None
-                    }
-                }
-            }
-            Err(_) => {
-                tracing::info!("Payment service not configured, skipping initialization");
-                None
-            }
-        };
+        // Registry 始终存在；每个 provider 独立完成配置校验和初始化。
+        let payment = Some(Arc::new(
+            crate::payment_registry::PaymentRegistry::from_env(Arc::clone(&pool)),
+        ));
 
-        Self {
+        Ok(Self {
             app_base_url: config.app_base_url,
             pool: Some(pool),
             auth: Arc::new(auth_service),
@@ -420,8 +799,14 @@ impl AppState {
             email_service,
             public_auth_cookie_secret,
             payment,
+            node_gateway,
+            cache,
+            responses_affinity: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
+            responses_websocket_admission: Arc::new(ResponsesWebSocketAdmission::default_limits()),
+            generation_http_body_admission: Arc::new(GenerationHttpBodyAdmission::default_limit()),
             gateway_config: config.gateway,
-        }
+            lifecycle,
+        })
     }
 
     /// 创建用于测试的应用状态，使用自定义 Provider（默认配置）
@@ -429,7 +814,10 @@ impl AppState {
         Self::with_providers_and_config(providers, AppStateConfig::default())
     }
 
-    /// 创建用于测试的应用状态，使用自定义 Provider和配置
+    /// 创建用于测试的应用状态，使用自定义 Provider和配置。
+    ///
+    /// # Panics
+    /// Panics when an explicitly selected backend cannot be initialized.
     pub fn with_providers_and_config(
         providers: HashMap<String, Arc<dyn ProviderAdapter>>,
         config: AppStateConfig,
@@ -466,7 +854,9 @@ impl AppState {
         ));
 
         // 创建 Gateway 执行器，使用自定义 Provider
-        let mut builder = GatewayBuilder::new().with_http_proxy(Arc::clone(&http_proxy));
+        let mut builder = GatewayBuilder::new()
+            .with_config(Self::gateway_executor_config(&config.gateway))
+            .with_http_proxy(Arc::clone(&http_proxy));
         for (name, provider) in providers {
             builder = builder.add_provider(name, provider);
         }
@@ -476,7 +866,14 @@ impl AppState {
         let billing = Arc::new(BillingService::new());
 
         // 根据配置创建限流服务
-        let rate_limiter = Self::create_rate_limiter(&config.rate_limit);
+        let rate_limiter = Self::create_rate_limiter(&config.rate_limit)
+            .expect("configured rate-limit backend must initialize");
+
+        // 创建缓存服务（降级为 no-op，因为无 Redis 连接池）
+        let cache = Self::create_disabled_cache();
+
+        // 将 PricingService 接入分布式缓存（确保代码路径覆盖）
+        let pricing_service = pricing_service.with_dist_cache(Arc::clone(&cache));
 
         // 创建邮件服务
         let email_service = Arc::new(EmailService::new(config.email));
@@ -497,8 +894,14 @@ impl AppState {
             billing,
             email_service,
             public_auth_cookie_secret,
-            payment: None, // 测试环境不需要支付服务
+            payment: None,      // 测试环境不需要支付服务
+            node_gateway: None, // 测试环境不需要节点网关
+            cache,
+            responses_affinity: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
+            responses_websocket_admission: Arc::new(ResponsesWebSocketAdmission::default_limits()),
+            generation_http_body_admission: Arc::new(GenerationHttpBodyAdmission::default_limit()),
             gateway_config: config.gateway,
+            lifecycle: Arc::new(NoopRequestLifecycleRecorder),
         }
     }
 
@@ -553,6 +956,20 @@ impl AppState {
     pub fn has_pool(&self) -> bool {
         self.pool.is_some()
     }
+
+    /// 获取节点网关 HMAC 签名密钥
+    ///
+    /// 单一数据源：始终从 `node_gateway.config.registration_token_secret` 读取，
+    /// 避免与独立字段重复存储导致的值不一致问题。
+    pub fn node_gateway_secret(&self) -> Option<&str> {
+        self.node_gateway.as_ref().and_then(|s| {
+            if s.config.registration_token_secret.is_empty() {
+                None
+            } else {
+                Some(s.config.registration_token_secret.as_str())
+            }
+        })
+    }
 }
 
 impl Default for AppState {
@@ -566,9 +983,185 @@ mod tests {
     use super::*;
 
     #[test]
+    fn production_crypto_initialization_rejects_missing_key() {
+        assert!(init_global_crypto(&keycompute_config::AppConfig::default(), true).is_err());
+    }
+
+    #[test]
+    fn crypto_initialization_rejects_invalid_configured_key() {
+        let config = keycompute_config::AppConfig {
+            crypto: Some(keycompute_config::CryptoConfig {
+                secret_key: Some("not-base64-or-32-bytes".to_string()),
+            }),
+            ..keycompute_config::AppConfig::default()
+        };
+
+        assert!(init_global_crypto(&config, true).is_err());
+        assert!(init_global_crypto(&config, false).is_err());
+    }
+
+    #[test]
+    fn development_crypto_initialization_allows_missing_key() {
+        init_global_crypto(&keycompute_config::AppConfig::default(), false).unwrap();
+    }
+
+    #[test]
+    fn app_state_config_preserves_redis_pool_settings() {
+        let config = keycompute_config::AppConfig {
+            redis: Some(keycompute_config::RedisConfig {
+                url: "redis://redis.internal:6379".to_string(),
+                pool_size: 23,
+                connect_timeout_secs: 7,
+            }),
+            ..keycompute_config::AppConfig::default()
+        };
+
+        let state_config = AppStateConfig::from_config(&config);
+        assert!(matches!(
+            state_config.rate_limit,
+            RateLimitBackendConfig::Redis {
+                pool_size: 23,
+                connect_timeout,
+                ..
+            } if connect_timeout == Duration::from_secs(7)
+        ));
+    }
+
+    #[test]
+    fn explicit_memory_rate_limiter_initializes_as_memory() {
+        let limiter = AppState::create_rate_limiter(&RateLimitBackendConfig::Memory).unwrap();
+        assert_eq!(
+            limiter.backend(),
+            keycompute_ratelimit::RateLimitBackend::Memory
+        );
+    }
+
+    #[cfg(feature = "redis")]
+    #[test]
+    fn invalid_configured_redis_rate_limiter_does_not_fall_back_to_memory() {
+        let result = AppState::create_rate_limiter(&RateLimitBackendConfig::Redis {
+            url: "not-a-redis-url".to_string(),
+            pool_size: 1,
+            connect_timeout: Duration::from_millis(10),
+        });
+        assert!(matches!(
+            result,
+            Err(crate::error::ApiError::Config(message))
+                if message.contains("Redis rate limiter could not initialize")
+        ));
+    }
+
+    #[cfg(feature = "redis")]
+    #[tokio::test]
+    async fn unreachable_configured_redis_stays_fail_closed() {
+        let limiter = AppState::create_rate_limiter(&RateLimitBackendConfig::Redis {
+            url: "redis://127.0.0.1:1".to_string(),
+            pool_size: 1,
+            connect_timeout: Duration::from_millis(50),
+        })
+        .expect("a syntactically valid Redis URL should create its pool");
+        assert_eq!(
+            limiter.backend(),
+            keycompute_ratelimit::RateLimitBackend::Redis
+        );
+        let key = keycompute_ratelimit::RateLimitKey::new(
+            uuid::Uuid::nil(),
+            uuid::Uuid::nil(),
+            uuid::Uuid::nil(),
+        );
+        assert!(limiter.get_rpm_count(&key).await.is_err());
+        assert_eq!(
+            limiter.backend(),
+            keycompute_ratelimit::RateLimitBackend::Redis,
+            "an outage must not replace the configured backend with process-local memory"
+        );
+    }
+
+    #[cfg(feature = "redis")]
+    #[tokio::test]
+    async fn fallible_app_state_constructor_rejects_unreachable_redis() {
+        let pool = keycompute_db::DbRouter::single(sea_orm::DatabaseConnection::Disconnected);
+        let config = AppStateConfig {
+            rate_limit: RateLimitBackendConfig::Redis {
+                url: "redis://127.0.0.1:1".to_string(),
+                pool_size: 1,
+                connect_timeout: Duration::from_millis(50),
+            },
+            ..AppStateConfig::default()
+        };
+
+        let result = AppState::try_with_pool_and_config(pool, config).await;
+        assert!(matches!(
+            result,
+            Err(crate::error::ApiError::Config(message))
+                if message.contains("Redis rate limiter is unreachable")
+        ));
+    }
+
+    #[cfg(not(feature = "redis"))]
+    #[test]
+    fn configured_redis_requires_a_redis_enabled_build() {
+        let result = AppState::create_rate_limiter(&RateLimitBackendConfig::Redis {
+            url: "redis://redis.internal:6379".to_string(),
+            pool_size: 1,
+            connect_timeout: Duration::from_secs(1),
+        });
+        assert!(matches!(
+            result,
+            Err(crate::error::ApiError::Config(message))
+                if message.contains("without Redis support")
+        ));
+    }
+
+    #[test]
+    fn gateway_executor_config_preserves_runtime_controls() {
+        let gateway_config = keycompute_config::GatewayConfig {
+            max_retries: 7,
+            timeout_secs: 43,
+            stream_timeout_secs: 987,
+            enable_fallback: false,
+            ..keycompute_config::GatewayConfig::default()
+        };
+
+        let executor_config = AppState::gateway_executor_config(&gateway_config);
+        assert_eq!(executor_config.max_retries, 7);
+        assert_eq!(executor_config.timeout_secs, 43);
+        assert_eq!(executor_config.stream_timeout_secs, 987);
+        assert!(!executor_config.enable_fallback);
+    }
+
+    #[test]
     fn test_app_state_new() {
         let state = AppState::new();
         // 基础测试，确保可以创建
         let _ = state;
+    }
+
+    #[tokio::test]
+    async fn responses_websocket_admission_enforces_global_and_tenant_limits() {
+        let admission = ResponsesWebSocketAdmission::with_limits(2, 1);
+        let first_tenant = uuid::Uuid::new_v4();
+        let second_tenant = uuid::Uuid::new_v4();
+
+        let first = admission.try_acquire(first_tenant).await.unwrap();
+        assert!(admission.try_acquire(first_tenant).await.is_none());
+        let second = admission.try_acquire(second_tenant).await.unwrap();
+        assert!(admission.try_acquire(uuid::Uuid::new_v4()).await.is_none());
+
+        drop(first);
+        assert!(admission.try_acquire(first_tenant).await.is_some());
+        drop(second);
+    }
+
+    #[test]
+    fn generation_http_body_admission_bounds_resident_large_requests() {
+        let admission = GenerationHttpBodyAdmission::default_limit();
+        let first = admission.try_acquire().unwrap();
+        let second = admission.try_acquire().unwrap();
+        assert!(admission.try_acquire().is_none());
+
+        drop(first);
+        assert!(admission.try_acquire().is_some());
+        drop(second);
     }
 }

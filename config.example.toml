@@ -1,0 +1,242 @@
+# KeyCompute 配置文件示例
+# 复制此文件为 config.toml 并根据需要修改。
+# 普通 cargo run 生成 debug 可执行文件，固定为开发模式且仅读取此文件；
+# KC__* 和 APP_BASE_URL 不会覆盖本文件中的配置。release/Docker 固定为
+# 生产模式，仅读取环境变量，不读取 config.toml。
+# 本文件中的密码和密钥是开发环境示例。生产启动会拒绝默认 JWT 密钥、
+# 缺失或无效的 Provider API Key 加密密钥；配置 Redis 时还会拒绝默认节点
+# HMAC 密钥；首次创建 system 管理员时会拒绝默认管理员密码。其他 change-me
+# 凭据不会被统一拦截，仍须由运维在生产部署前逐项替换。
+
+# ==================== 应用公开地址配置（全局） ====================
+# 用于密码重置邮件、邀请注册链接等中的公开链接
+# 生产模式的对应配置为 APP_BASE_URL 环境变量
+# 未显式配置时不生成公开链接；启用邮件服务时必须显式配置
+# 非本地公开地址必须使用 https；仅 localhost / 回环地址可使用 http
+app_base_url = "http://localhost:8080"
+
+# 读库连接 URL 列表（空数组表示不启用读写分离）
+database_read_urls = []
+
+# ==================== 服务器配置 ====================
+[server]
+# 服务器绑定地址
+bind_addr = "0.0.0.0"
+# 服务器监听端口
+port = 3000
+
+# ==================== 数据库配置 ====================
+[database]
+# PostgreSQL 连接 URL
+url = "postgres://keycompute:change-me-strong-password@127.0.0.1:5432/keycompute"
+# 最大连接数
+max_connections = 10
+# 最小连接数
+min_connections = 2
+# 连接超时时间（秒）
+connect_timeout_secs = 30
+# 连接空闲超时时间（秒）
+idle_timeout_secs = 600
+# 连接最大生命周期（秒）
+max_lifetime_secs = 1800
+
+# ==================== 读写分离路由配置 ====================
+[database_routing]
+# 路由策略：round_robin / random / weighted
+strategy = "round_robin"
+# 读库权重（仅 weighted 策略生效；空数组表示等权）
+read_weights = []
+# 额外重试次数
+retry_attempts = 2
+# 熔断时间（毫秒）
+circuit_break_ms = 30000
+# 读库不可用时是否回退到写库
+fallback_to_write = true
+# 健康检查间隔（秒，0 表示禁用）
+health_check_interval_secs = 15
+
+# ==================== 读库连接池配置 ====================
+[database_read]
+# 最大连接数
+max_connections = 10
+# 最小连接数
+min_connections = 1
+# 连接超时时间（秒）
+connect_timeout_secs = 5
+# 连接空闲超时时间（秒）
+idle_timeout_secs = 600
+# 获取连接超时时间（秒）
+acquire_timeout_secs = 10
+# 连接最大生命周期（秒）
+max_lifetime_secs = 1800
+
+# ==================== Redis 配置（可选）====================
+[redis]
+# Redis 连接 URL（注意：需要包含密码，格式：redis://:password@host:port）
+# 生产模式通过 KC__REDIS__URL 提供对应配置
+url = "redis://:change-me-redis-password@127.0.0.1:6379"
+# 连接池大小
+pool_size = 10
+# 连接超时（秒）
+connect_timeout_secs = 5
+
+# ==================== 认证配置 ====================
+[auth]
+# JWT 密钥（生产环境必须修改，至少 32 字节；不能是纯空白）
+jwt_secret = "change-me-in-production"
+# JWT 签发者
+jwt_issuer = "keycompute"
+# JWT 过期时间（秒）
+jwt_expiry_secs = 3600
+
+# ==================== Gateway 配置 ====================
+[gateway]
+# 管理端原始追踪查询允许的最大时间范围（小时）
+monitoring_raw_max_hours = 24
+# 自动真实推理探测间隔（秒）；默认 0 表示禁用，启用后会产生上游调用与费用
+account_probe_interval_secs = 0
+# 自动探测并发数（1-32）
+account_probe_concurrency = 4
+# 最大重试次数
+max_retries = 3
+# 请求超时时间（秒）
+timeout_secs = 120
+# 是否启用 fallback
+enable_fallback = true
+# HTTP 请求超时（秒）
+request_timeout_secs = 120
+# 流式请求超时（秒）
+stream_timeout_secs = 600
+
+# Gateway HTTP 代理配置（可选）
+# 用于多代理出口、按 Provider 路由到不同代理
+# [gateway.proxy]
+
+# ==================== 加密配置（可选）====================
+# 用于上游 Provider API Key 的加密存储
+# 生产环境必须配置；未配置时服务拒绝启动
+# 
+# [crypto]
+# 加密密钥（Base64 编码的 32 字节密钥）
+# 生成方式：openssl rand -base64 32
+# 或在代码中：keycompute_runtime::ApiKeyCrypto::generate_key()
+#
+# 生产模式对应环境变量：KC__CRYPTO__SECRET_KEY
+#
+# secret_key = "your-base64-encoded-32-byte-key"
+
+# ==================== 邮件服务配置 ====================
+# 默认保持禁用；用于发送注册验证码、密码重置和欢迎邮件时，需完整填写
+# SMTP 主机、用户名、密码、发件人地址，并保留有效的 app_base_url
+#
+[email]
+# SMTP 服务器地址
+smtp_host = ""
+# SMTP 端口（默认 465）
+smtp_port = 465
+# SMTP 用户名
+smtp_username = ""
+# SMTP 密码
+smtp_password = ""
+# 发件人邮箱地址
+from_address = ""
+# 发件人显示名称（可选）
+from_name = "KeyCompute"
+# 是否使用 TLS（默认 true）
+use_tls = true
+# 邮件发送超时（秒，默认 30）
+timeout_secs = 30
+# 需求收集表单接收人邮箱（首页"提交算力需求"提交后发送至此邮箱，可选；未配置则该功能返回失败）
+# requirement_recipient = "sales@example.com"
+
+# ==================== 节点网关配置（Node Gateway） ====================
+# 用于个人 PC 节点接入，支持 Ollama 本地模型执行
+# 节点通过 node-token 客户端连接，主动轮询任务并提交结果
+#
+# 审批流程：
+#   1. 用户申请 → status='pending'（前端 Dashboard 申请）
+#   2. Admin 审批 → 下发 HMAC 签名 token → 用户端展示 token 明文
+#   3. 用户使用 token 注册节点 → token 一次性消费（status='consumed'）
+#
+[node_gateway]
+# HMAC 签名密钥（用于签发/验证节点注册 token）
+# 生产环境配置 Redis、从而启用 Node Gateway 时必须修改（至少 16 字节）
+# 生成命令：openssl rand -base64 32
+# 生产模式对应环境变量: KC__NODE_GATEWAY__REGISTRATION_TOKEN_SECRET
+registration_token_secret = "change-me-node-registration-token-secret"
+# 会话 TTL（秒），节点会话有效期，默认 300（5 分钟）
+# 超过此时间未心跳的会话将被标记为过期
+session_ttl_secs = 300
+# 心跳间隔（秒），node-token 客户端发送心跳的间隔，默认 30
+heartbeat_interval_secs = 30
+# 轮询超时（秒），节点长轮询领取任务的最长等待时间，默认 30
+poll_timeout_secs = 30
+# 任务 deadline 超时（秒），任务必须在 deadline 内完成，默认 120（2 分钟）
+task_deadline_secs = 120
+# 完成宽限期（秒），任务过期后允许提交结果的时间，默认 60（1 分钟）
+complete_grace_secs = 60
+# 节点失败阈值，节点连续失败次数达到此值后被排除（excluded），默认 3
+node_failure_threshold = 3
+# 任务失败阈值，单个任务失败重试次数上限，默认 3
+task_failure_threshold = 3
+# Sweeper 心跳 TTL（秒），超过此时间未心跳的 online 节点标记为 offline，默认 600（10 分钟）
+sweeper_heartbeat_ttl_secs = 600
+# Sweeper 补推间隔（秒），创建超过此时间的 queued 任务补推到 Redis，默认 10
+sweeper_repush_interval_secs = 10
+#
+# 节点租赁小费功能
+# ==========================
+# 小费比例 (node_tip_ratio) 不是 [node_gateway] 配置项，而是存储在 system_settings 表中。
+# 管理员可通过 API 或管理面板 > 系统设置 动态调整，默认值 0.90。
+# 计费公式: tip = user_billed_amount × node_tip_ratio
+# 提现方式: alipay（管理员线下打款）或 balance（直接转入可用余额）
+#
+# 以下是生产模式的对应环境变量，不会覆盖本开发文件：
+# KC__NODE_GATEWAY__REGISTRATION_TOKEN_SECRET=change-me-node-registration-token-secret
+# KC__NODE_GATEWAY__SESSION_TTL_SECS=300
+# KC__NODE_GATEWAY__HEARTBEAT_INTERVAL_SECS=30
+# KC__NODE_GATEWAY__POLL_TIMEOUT_SECS=30
+# KC__NODE_GATEWAY__TASK_DEADLINE_SECS=120
+# KC__NODE_GATEWAY__COMPLETE_GRACE_SECS=60
+# KC__NODE_GATEWAY__NODE_FAILURE_THRESHOLD=3
+# KC__NODE_GATEWAY__TASK_FAILURE_THRESHOLD=3
+# KC__NODE_GATEWAY__SWEEPER_HEARTBEAT_TTL_SECS=600
+# KC__NODE_GATEWAY__SWEEPER_REPUSH_INTERVAL_SECS=10
+
+# ==================== 默认系统管理员（环境变量配置） ====================
+# 首次启动时自动创建的系统管理员账号
+# 注意：这些值不在 config.toml 中配置，而是通过环境变量设置
+# 生产环境首次创建 system 管理员前必须修改（至少 12 个字符且不能是纯空白），否则服务拒绝启动
+# system 管理员创建完成后，后续重启可删除该一次性引导密码
+#
+# 环境变量：
+# KC__DEFAULT_ADMIN_EMAIL=admin@keycompute.local
+# KC__DEFAULT_ADMIN_PASSWORD=change-me-admin-password
+#
+# 对应的 docker-compose.yml 中的设置：
+# KC__DEFAULT_ADMIN_EMAIL: ${KC__DEFAULT_ADMIN_EMAIL:-admin@keycompute.local}
+# KC__DEFAULT_ADMIN_PASSWORD: ${KC__DEFAULT_ADMIN_PASSWORD:-}
+
+# ==================== 支付渠道（仅环境变量） ====================
+# 支付密钥不得写入 config.toml 或 system_settings。管理员页面中的开关只控制新订单；
+# 只有开关开启且以下配置校验通过的渠道才会展示给用户。
+#
+# 支付宝（兼容现有变量名）：
+# ALIPAY_APP_ID=...
+# ALIPAY_PRIVATE_KEY=...
+# ALIPAY_PUBLIC_KEY=...
+# ALIPAY_PREVIOUS_PUBLIC_KEYS_JSON=["..."] # 轮换窗口内的历史验签公钥
+# ALIPAY_NOTIFY_URL=https://example.com/api/v1/payments/notify/alipay
+# ALIPAY_RETURN_URL=https://example.com/payments
+#
+# 微信支付 API v3（Native）：
+# KC__PAYMENT__WECHATPAY__APPID=...
+# KC__PAYMENT__WECHATPAY__MCHID=...
+# KC__PAYMENT__WECHATPAY__MERCHANT_SERIAL_NO=...
+# KC__PAYMENT__WECHATPAY__MERCHANT_PRIVATE_KEY=...
+# KC__PAYMENT__WECHATPAY__API_V3_KEY=... # 必须为 32 字节
+# KC__PAYMENT__WECHATPAY__WECHATPAY_PUBLIC_KEY_ID=PUB_KEY_ID_...
+# KC__PAYMENT__WECHATPAY__WECHATPAY_PUBLIC_KEY=...
+# KC__PAYMENT__WECHATPAY__PREVIOUS_CALLBACK_KEYS_JSON=[{"public_key_id":"...","public_key":"...","api_v3_key":"..."}]
+# KC__PAYMENT__WECHATPAY__NOTIFY_URL=https://example.com/api/v1/payments/notify/wechatpay
+# KC__PAYMENT__WECHATPAY__TIMEOUT_MINUTES=15

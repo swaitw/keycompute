@@ -2,9 +2,8 @@
 //!
 //! 用户和租户信息的加载与管理。
 
-use keycompute_db::{Tenant, User};
+use keycompute_db::{DbRouter, Tenant, User};
 use keycompute_types::{KeyComputeError, Result};
-use sqlx::PgPool;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -133,13 +132,13 @@ impl TenantInfo {
 #[derive(Clone)]
 pub struct UserService {
     /// 数据库连接池（可选）
-    pool: Option<Arc<PgPool>>,
+    pool: Option<Arc<DbRouter>>,
 }
 
 impl std::fmt::Debug for UserService {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("UserService")
-            .field("pool", &self.pool.as_ref().map(|_| "PgPool"))
+            .field("pool", &self.pool.as_deref().map(|_| "DatabaseConnection"))
             .finish()
     }
 }
@@ -151,7 +150,7 @@ impl UserService {
     }
 
     /// 创建带数据库连接的用户服务
-    pub fn with_pool(pool: Arc<PgPool>) -> Self {
+    pub fn with_pool(pool: Arc<DbRouter>) -> Self {
         Self { pool: Some(pool) }
     }
 
@@ -159,7 +158,7 @@ impl UserService {
     pub async fn load_user(&self, user_id: Uuid) -> Result<UserInfo> {
         tracing::debug!(user_id = %user_id, "Loading user");
 
-        if let Some(pool) = &self.pool {
+        if let Some(pool) = self.pool.as_deref() {
             let user = User::find_by_id(pool, user_id)
                 .await
                 .map_err(|e| KeyComputeError::DatabaseError(format!("Failed to load user: {}", e)))?
@@ -182,11 +181,33 @@ impl UserService {
         ))
     }
 
+    /// 加载用户当前的 token_version
+    ///
+    /// 用于 JWT 失效校验。无数据库连接时返回 `None`（跳过校验，保持结构性验证行为）。
+    ///
+    /// 该读取强制走主库（`write_conn`）：这是安全敏感校验，若走读副本，
+    /// 复制延迟会形成一个窗口，使密码重置/登出后本应失效的旧 token 仍被放行。
+    pub async fn load_token_version(&self, user_id: Uuid) -> Result<Option<i32>> {
+        if let Some(pool) = self.pool.as_deref() {
+            let version = User::find_token_version(pool.write_conn(), user_id)
+                .await
+                .map_err(|e| {
+                    KeyComputeError::DatabaseError(format!("Failed to load token version: {}", e))
+                })?
+                .ok_or_else(|| {
+                    KeyComputeError::AuthError(format!("User not found: {}", user_id))
+                })?;
+            return Ok(Some(version));
+        }
+
+        Ok(None)
+    }
+
     /// 根据 ID 加载租户
     pub async fn load_tenant(&self, tenant_id: Uuid) -> Result<TenantInfo> {
         tracing::debug!(tenant_id = %tenant_id, "Loading tenant");
 
-        if let Some(pool) = &self.pool {
+        if let Some(pool) = self.pool.as_deref() {
             let tenant = Tenant::find_by_id(pool, tenant_id)
                 .await
                 .map_err(|e| {
@@ -196,12 +217,10 @@ impl UserService {
                     KeyComputeError::AuthError(format!("Tenant not found: {}", tenant_id))
                 })?;
 
-            // 检查租户状态
+            // 检查租户状态：具体状态值属于内部信息只进日志，不拼入错误消息
             if tenant.status != "active" {
-                return Err(KeyComputeError::AuthError(format!(
-                    "Tenant is not active: {}",
-                    tenant.status
-                )));
+                tracing::warn!(tenant_id = %tenant.id, status = %tenant.status, "Tenant is not active");
+                return Err(KeyComputeError::AuthError("Tenant is not active".into()));
             }
 
             tracing::info!(tenant_id = %tenant.id, name = %tenant.name, status = %tenant.status, "Tenant loaded");
@@ -217,7 +236,7 @@ impl UserService {
     pub async fn load_by_produce_ai_key(&self, produce_ai_key_id: Uuid) -> Result<UserInfo> {
         tracing::debug!(produce_ai_key_id = %produce_ai_key_id, "Loading user by Produce AI key");
 
-        if let Some(pool) = &self.pool {
+        if let Some(pool) = self.pool.as_deref() {
             // 通过 Produce AI Key 查找用户
             use keycompute_db::ProduceAiKey;
             let produce_ai_key = ProduceAiKey::find_by_id(pool, produce_ai_key_id)
@@ -371,5 +390,14 @@ mod tests {
         assert!(result.is_ok());
         let (user, _tenant) = result.unwrap();
         assert_eq!(user.id, user_id);
+    }
+
+    #[tokio::test]
+    async fn test_user_service_load_token_version_no_db() {
+        // 无数据库连接时返回 None（跳过 token_version 校验）
+        let service = UserService::new();
+        let result = service.load_token_version(Uuid::new_v4()).await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), None);
     }
 }

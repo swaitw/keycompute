@@ -1,4 +1,5 @@
 use dioxus::prelude::*;
+use ui::PageHeader;
 
 use crate::hooks::use_i18n::use_i18n;
 use crate::services::user_service;
@@ -35,6 +36,33 @@ pub fn UserSettings() -> Element {
             ));
             return;
         }
+        if !new_pwd().chars().any(|c| c.is_uppercase()) {
+            error_msg.set(Some(
+                i18n.t("account_settings.password_no_uppercase").to_string(),
+            ));
+            return;
+        }
+        if !new_pwd().chars().any(|c| c.is_lowercase()) {
+            error_msg.set(Some(
+                i18n.t("account_settings.password_no_lowercase").to_string(),
+            ));
+            return;
+        }
+        if !new_pwd().chars().any(|c| c.is_ascii_digit()) {
+            error_msg.set(Some(
+                i18n.t("account_settings.password_no_digit").to_string(),
+            ));
+            return;
+        }
+        if !new_pwd()
+            .chars()
+            .any(|c| "!@#$%^&*()_+-=[]{}|;:',.<>?/~`".contains(c))
+        {
+            error_msg.set(Some(
+                i18n.t("account_settings.password_no_special").to_string(),
+            ));
+            return;
+        }
         saving.set(true);
         error_msg.set(None);
         success_msg.set(None);
@@ -66,12 +94,9 @@ pub fn UserSettings() -> Element {
     rsx! {
         div {
             class: "page-container account-settings-page",
-            div {
-                class: "page-header",
-                div {
-                    h1 { class: "page-title", {i18n.t("page.account_settings")} }
-                    p { class: "page-description", {i18n.t("account_settings.page_desc")} }
-                }
+            PageHeader {
+                title: i18n.t("page.account_settings").to_string(),
+                description: i18n.t("account_settings.subtitle").to_string(),
             }
 
             if let Some(msg) = success_msg() {

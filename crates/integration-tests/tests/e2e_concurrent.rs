@@ -12,10 +12,10 @@
 use futures::StreamExt;
 use integration_tests::common::VerificationChain;
 use integration_tests::mocks::provider::MockProviderFactory;
-use keycompute_provider_trait::{ProviderAdapter, UpstreamRequest};
 use keycompute_ratelimit::{RateLimitKey, RateLimitService};
 use keycompute_routing::{AccountStateStore, ProviderHealthStore, RoutingEngine};
-use keycompute_types::{PricingSnapshot, RequestContext};
+use keycompute_types::{ExecutionTarget, PricingSnapshot, RequestContext};
+use llm_protocol_provider::{ProviderAdapter, UpstreamRequest};
 use rust_decimal::Decimal;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -30,6 +30,7 @@ use uuid::Uuid;
 /// 创建测试用的请求上下文
 fn create_test_context() -> RequestContext {
     RequestContext::new(
+        Uuid::new_v4(),
         Uuid::new_v4(),
         Uuid::new_v4(),
         Uuid::new_v4(),
@@ -376,7 +377,7 @@ async fn test_concurrent_provider_requests() {
 
     // 1. 创建 Provider
     let provider = Arc::new(MockProviderFactory::create_openai());
-    let transport = Arc::new(keycompute_provider_trait::DefaultHttpTransport::new());
+    let transport = Arc::new(llm_protocol_provider::DefaultHttpTransport::new());
 
     chain.add_step(
         "integration-tests::mocks",
@@ -402,7 +403,8 @@ async fn test_concurrent_provider_requests() {
         let events = total_events.clone();
 
         tasks.spawn(async move {
-            let request = UpstreamRequest::new("http://test", "test-key", "gpt-4o");
+            let request =
+                UpstreamRequest::new("http://test", "test-key", "gpt-4o").with_stream(true);
             let result = provider.stream_chat(&*transport, request).await;
 
             match result {
@@ -432,7 +434,7 @@ async fn test_concurrent_provider_requests() {
 
     // 4. 验证
     chain.add_step(
-        "keycompute-provider-trait",
+        "llm-protocol-provider",
         "ConcurrentProvider::success_rate",
         format!(
             "Success: {}/{}, Errors: {}",
@@ -442,7 +444,7 @@ async fn test_concurrent_provider_requests() {
     );
 
     chain.add_step(
-        "keycompute-provider-trait",
+        "llm-protocol-provider",
         "ConcurrentProvider::events_per_request",
         format!(
             "Total events: {}, Avg per request: {:.1}",
@@ -468,7 +470,7 @@ async fn test_concurrent_mixed_providers() {
     let timeout_provider = Arc::new(MockProviderFactory::create_timeout());
     let flaky_provider = Arc::new(MockProviderFactory::create_flaky(2));
 
-    let transport = Arc::new(keycompute_provider_trait::DefaultHttpTransport::new());
+    let transport = Arc::new(llm_protocol_provider::DefaultHttpTransport::new());
 
     // 2. 并发请求（每种类型 15 个）
     let mut tasks = JoinSet::new();
@@ -482,7 +484,8 @@ async fn test_concurrent_mixed_providers() {
             let t = transport.clone();
             let r = results.clone();
             tasks.spawn(async move {
-                let request = UpstreamRequest::new("http://test", "test-key", "gpt-4o");
+                let request =
+                    UpstreamRequest::new("http://test", "test-key", "gpt-4o").with_stream(true);
                 if p.stream_chat(&*t, request).await.is_ok() {
                     r.lock().unwrap().0 += 1;
                 }
@@ -495,7 +498,8 @@ async fn test_concurrent_mixed_providers() {
             let t = transport.clone();
             let r = results.clone();
             tasks.spawn(async move {
-                let request = UpstreamRequest::new("http://test", "test-key", "gpt-4o");
+                let request =
+                    UpstreamRequest::new("http://test", "test-key", "gpt-4o").with_stream(true);
                 if p.stream_chat(&*t, request).await.is_err() {
                     r.lock().unwrap().1 += 1;
                 }
@@ -508,7 +512,8 @@ async fn test_concurrent_mixed_providers() {
             let t = transport.clone();
             let r = results.clone();
             tasks.spawn(async move {
-                let request = UpstreamRequest::new("http://test", "test-key", "gpt-4o");
+                let request =
+                    UpstreamRequest::new("http://test", "test-key", "gpt-4o").with_stream(true);
                 if p.stream_chat(&*t, request).await.is_err() {
                     r.lock().unwrap().2 += 1;
                 }
@@ -521,7 +526,8 @@ async fn test_concurrent_mixed_providers() {
             let t = transport.clone();
             let r = results.clone();
             tasks.spawn(async move {
-                let request = UpstreamRequest::new("http://test", "test-key", "gpt-4o");
+                let request =
+                    UpstreamRequest::new("http://test", "test-key", "gpt-4o").with_stream(true);
                 let result = p.stream_chat(&*t, request).await;
                 if result.is_ok() {
                     r.lock().unwrap().3 += 1;
@@ -743,7 +749,7 @@ async fn test_full_chain_concurrent_pressure() {
     // 1. 创建所有组件
     let engine = Arc::new(create_test_engine());
     let provider = Arc::new(MockProviderFactory::create_openai());
-    let transport = Arc::new(keycompute_provider_trait::DefaultHttpTransport::new());
+    let transport = Arc::new(llm_protocol_provider::DefaultHttpTransport::new());
 
     chain.add_step(
         "integration-tests",
@@ -771,36 +777,42 @@ async fn test_full_chain_concurrent_pressure() {
 
             // Step 1: Routing
             if let Ok(plan) = engine.route(&ctx).await {
-                // Step 2: Check account cooldown
-                if !engine.is_account_cooling(&plan.primary.account_id) {
-                    // Step 3: Provider request
-                    let request = UpstreamRequest::new(
-                        &plan.primary.endpoint,
-                        plan.primary.upstream_api_key.clone(),
-                        &ctx.model,
-                    );
+                // Step 2: Check account cooldown (only for ProviderAccount)
+                if let ExecutionTarget::ProviderAccount {
+                    account_id,
+                    endpoint,
+                    upstream_api_key,
+                    ..
+                } = &plan.primary
+                {
+                    if !engine.is_account_cooling(account_id) {
+                        // Step 3: Provider request
+                        let request =
+                            UpstreamRequest::new(endpoint, upstream_api_key.clone(), &ctx.model)
+                                .with_stream(true);
 
-                    if let Ok(mut stream) = provider.stream_chat(&*transport, request).await {
-                        // Step 4: Consume stream
-                        let mut event_count = 0u64;
-                        while let Some(event) = stream.next().await {
-                            if event.is_ok() {
-                                event_count += 1;
+                        if let Ok(mut stream) = provider.stream_chat(&*transport, request).await {
+                            // Step 4: Consume stream
+                            let mut event_count = 0u64;
+                            while let Some(event) = stream.next().await {
+                                if event.is_ok() {
+                                    event_count += 1;
+                                }
                             }
-                        }
-                        success = event_count > 0;
+                            success = event_count > 0;
 
-                        // Step 5: Record success
-                        if success {
-                            stats.lock().unwrap().provider_successes += 1;
+                            // Step 5: Record success
+                            if success {
+                                stats.lock().unwrap().provider_successes += 1;
+                            }
+                        } else {
+                            // Provider failed
+                            stats.lock().unwrap().provider_failures += 1;
                         }
                     } else {
-                        // Provider failed
-                        stats.lock().unwrap().provider_failures += 1;
+                        stats.lock().unwrap().cooldown_skips += 1;
                     }
-                } else {
-                    stats.lock().unwrap().cooldown_skips += 1;
-                }
+                } // Close the if let ExecutionTarget::ProviderAccount
             }
 
             if success {
@@ -864,7 +876,7 @@ async fn test_burst_traffic_handling() {
 
     // 1. 创建组件
     let provider = Arc::new(MockProviderFactory::create_openai());
-    let transport = Arc::new(keycompute_provider_trait::DefaultHttpTransport::new());
+    let transport = Arc::new(llm_protocol_provider::DefaultHttpTransport::new());
 
     // 2. 分批发送请求模拟突发流量
     let batches = 5;
@@ -886,7 +898,8 @@ async fn test_burst_traffic_handling() {
             let processed = processed.clone();
 
             all_tasks.spawn(async move {
-                let request = UpstreamRequest::new("http://test", "test-key", "gpt-4o");
+                let request =
+                    UpstreamRequest::new("http://test", "test-key", "gpt-4o").with_stream(true);
                 if provider.stream_chat(&*transport, request).await.is_ok() {
                     processed.fetch_add(1, Ordering::Relaxed);
                 }
@@ -951,7 +964,7 @@ async fn test_sustained_high_load() {
 
     // 1. 创建组件
     let provider = Arc::new(MockProviderFactory::create_openai());
-    let transport = Arc::new(keycompute_provider_trait::DefaultHttpTransport::new());
+    let transport = Arc::new(llm_protocol_provider::DefaultHttpTransport::new());
 
     // 2. 持续发送请求
     let total_requests = duration_secs * target_rps;
@@ -966,7 +979,8 @@ async fn test_sustained_high_load() {
         let success = success_count.clone();
 
         tasks.spawn(async move {
-            let request = UpstreamRequest::new("http://test", "test-key", "gpt-4o");
+            let request =
+                UpstreamRequest::new("http://test", "test-key", "gpt-4o").with_stream(true);
             if provider.stream_chat(&*transport, request).await.is_ok() {
                 success.fetch_add(1, Ordering::Relaxed);
             }

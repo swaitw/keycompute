@@ -16,12 +16,13 @@ keycompute-billing = { workspace = true }
 keycompute-distribution = { workspace = true }
 keycompute-observability = { workspace = true }
 keycompute-server = { workspace = true }
+keycompute-cache = { workspace = true }
 keycompute-emailserver = { workspace = true }
-keycompute-provider-trait = { workspace = true }
-keycompute-openai = { workspace = true }
-keycompute-claude = { workspace = true }
-keycompute-ollama = { workspace = true }
+llm-protocol-provider = { workspace = true }
+llm-protocol-openai = { workspace = true }
+llm-protocol-anthropic = { workspace = true }
 llm-gateway = { workspace = true }
+node-gateway = { workspace = true }
 
 # 测试依赖
 tokio = { version = "1", features = ["full", "test-util"] }
@@ -38,17 +39,20 @@ futures = "0.3"
 tokio-stream = "0.1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "uuid", "chrono"] }
+sea-orm = { workspace = true }
 sha2 = "0.10"
 hex = "0.4"
+dotenv = "0.15"
 
 # 测试框架
 anyhow = "1.0"
 once_cell = "1.19"
 dashmap = "6.0"
+serial_test = "3.1"
 async-trait = "0.1"
 bytes = "1"
-tiktoken-rs = "0.9.1"
+tiktoken-rs = "0.11.0"
+deadpool-redis = "0.18"
 
 [dev-dependencies]
 tokio-test = "0.4"

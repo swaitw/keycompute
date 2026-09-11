@@ -1,28 +1,32 @@
+use super::examples::{
+    anthropic_examples, openai_examples, pick_anthropic_model, pick_responses_model,
+    pick_sample_model, responses_examples,
+};
+use crate::hooks::use_i18n::use_i18n;
+use crate::services::{api_client::with_auto_refresh, api_key_service, model_service};
+use crate::stores::auth_store::AuthStore;
+use crate::stores::ui_store::UiStore;
+use crate::utils::on_copy;
+use crate::utils::time::format_time;
 use dioxus::prelude::*;
 use ui::{
-    Badge, BadgeVariant, Button, ButtonSize, ButtonVariant, Pagination, Table, TableHead,
-    icons::IconPlus,
+    Badge, BadgeVariant, Button, ButtonSize, ButtonVariant, ConfirmModal, Pagination, Table,
+    TableHead,
+    icons::{IconCopy, IconPlus},
 };
 
 const PAGE_SIZE: usize = 20;
 
-use crate::hooks::use_i18n::use_i18n;
-use crate::services::{api_client::with_auto_refresh, api_key_service, model_service};
-use crate::stores::auth_store::AuthStore;
-use crate::utils::time::format_time;
-
-/// 复制文本到剪贴板（WASM 环境）
-fn copy_to_clipboard(text: &str) {
-    #[cfg(target_arch = "wasm32")]
-    {
-        let _ = web_sys::window().map(|w| {
-            let clipboard = w.navigator().clipboard();
-            clipboard.write_text(text)
-        });
-    }
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        let _ = text; // 非 WASM 环境暂不支持
+fn model_display_rank(model: &str) -> usize {
+    match model {
+        "gpt-4-turbo" => 0,
+        "gpt-4o-mini" => 1,
+        "qwen3-14b" => 2,
+        "deepseek-chat" => 3,
+        model if model.starts_with("claude-3-5-sonnet") => 4,
+        "gpt-4o" => 5,
+        "gpt-3.5-turbo" => 6,
+        _ => 100,
     }
 }
 
@@ -30,20 +34,40 @@ fn copy_to_clipboard(text: &str) {
 pub fn ApiKeyList() -> Element {
     let i18n = use_i18n();
     let auth_store = use_context::<AuthStore>();
+    let ui_store = use_context::<UiStore>();
     let mut show_create = use_signal(|| false);
     let mut new_key_name = use_signal(String::new);
     let mut creating = use_signal(|| false);
     let mut create_error = use_signal(|| Option::<String>::None);
     let mut new_key_value = use_signal(|| Option::<String>::None);
+    let mut delete_candidate = use_signal(|| Option::<(String, String)>::None);
+    let mut delete_modal_open = use_signal(|| false);
     let mut page = use_signal(|| 1u32);
     // 是否显示已撤销的 Key（默认不显示）
     let mut include_revoked = use_signal(|| false);
     // 复制状态
     let mut copied = use_signal(|| false);
+    let mut example_tab = use_signal(|| "env".to_string());
+    // 示例入口（Chat Completions / Responses / Anthropic Messages）
+    let mut example_protocol = use_signal(|| "openai".to_string());
     let create_failed = i18n.t("api_keys.create_failed");
 
-    // 获取模型列表（用于显示用法示例）
-    let models = use_resource(move || async move { model_service::list_models().await.ok() });
+    // 获取模型列表（用于显示用法示例）：按当前示例协议拉取，
+    // 与入口协议隔离保持一致（OpenAI 示例只展示 openai 协议模型，
+    // Anthropic 示例展示 anthropic 协议模型）。
+    let models = use_resource(move || {
+        let selected = example_protocol();
+        let (protocol, capability) = match selected.as_str() {
+            "anthropic" => ("anthropic".to_string(), "messages".to_string()),
+            "responses" => ("openai".to_string(), "responses".to_string()),
+            _ => ("openai".to_string(), "chat_completions".to_string()),
+        };
+        async move {
+            model_service::list_models(&protocol, Some(&capability))
+                .await
+                .ok()
+        }
+    });
 
     // 拉取 key 列表
     let mut keys = use_resource(move || async move {
@@ -91,10 +115,8 @@ pub fn ApiKeyList() -> Element {
     };
 
     rsx! {
-        div {
-            class: "page-container kc-api-page",
-            div {
-                class: "page-header kc-api-header",
+        div { class: "page-container kc-api-page",
+            div { class: "page-header kc-api-header",
                 div { class: "kc-api-heading",
                     h1 { class: "page-title", {i18n.t("page.api_keys")} }
                     p { class: "page-subtitle", {i18n.t("api_keys.subtitle")} }
@@ -105,6 +127,7 @@ pub fn ApiKeyList() -> Element {
                         onclick: move |_| {
                             show_create.set(true);
                             new_key_value.set(None);
+                            example_protocol.set("openai".to_string());
                         },
                         IconPlus { size: 16 }
                         {i18n.t("api_keys.create")}
@@ -145,69 +168,208 @@ pub fn ApiKeyList() -> Element {
                 {
                     // 同域部署时从浏览器地址解析完整 origin，避免示例里只显示相对路径 /v1
                     let api_url = crate::services::api_client::public_openai_api_base_url();
+                    // Anthropic SDK 会在 base_url 后自行追加 /v1/messages，示例需用不含 /v1 的根路径
+                    let api_root = crate::services::api_client::public_api_root_url();
 
-                    // 获取第一个模型作为示例
-                    let sample_model = models()
+                    let available_models = models()
                         .flatten()
-                        .and_then(|m| m.data.first().map(|model| model.id.clone()))
-                        .unwrap_or_else(|| "deepseek-chat".to_string());
+                        .map(|m| {
+                            let mut data = m.data;
+                            data.sort_by(|a, b| {
+                                model_display_rank(&a.id)
+                                    .cmp(&model_display_rank(&b.id))
+                                    .then_with(|| a.id.cmp(&b.id))
+                            });
+                            data
+                        })
+                        .unwrap_or_default();
 
-                    // 生成要复制的文本
-                    let example_text = format!(
-                        r#"API_URL="{}"
-API_KEY="{}"
-API_MODEL="{}""#,
-                        api_url, key, sample_model
-                    );
-                    let example_text_for_click = example_text.clone();
+                    let selected_tab = example_tab();
+                    let is_anthropic = example_protocol() == "anthropic";
+                    let is_responses = example_protocol() == "responses";
+                    let sample_model = if is_responses {
+                        pick_responses_model(&available_models)
+                    } else {
+                        pick_sample_model(&available_models)
+                    };
+                    let anthropic_model = pick_anthropic_model(&available_models);
 
+                    let examples = if is_anthropic {
+                        anthropic_examples(
+                            &api_root,
+                            &key,
+                            &anthropic_model,
+                            i18n.t("api_keys.example_env_comment"),
+                        )
+                    } else if is_responses {
+                        responses_examples(
+                            &api_url,
+                            &key,
+                            &sample_model,
+                            i18n.t("api_keys.example_env_comment"),
+                        )
+                    } else {
+                        openai_examples(
+                            &api_url,
+                            &key,
+                            &sample_model,
+                            i18n.t("api_keys.example_env_comment"),
+                        )
+                    };
+
+                    let example_text = examples.for_tab(&selected_tab).to_string();
+                    // 预先计算 anthropic 提示文案（含模型名参数），避免在 rsx 内嵌多行表达式节点。
+                    // {model} 参数与示例实际使用的 anthropic_model 保持一致：列表为空时
+                    // anthropic_model 即空模型，文案与示例不会出现矛盾。
+                    let anthropic_note = i18n
+                        .t_with_args(
+                            "api_keys.example_note_anthropic",
+                            &[("model", anthropic_model.as_str())],
+                        );
                     let copied_label = i18n.t("api_keys.copied");
                     let copy_hint = i18n.t("api_keys.copy_hint");
+                    let copy_manual_hint = i18n.t("common.copy_manual_hint");
                     rsx! {
-                        div {
-                            class: "alert alert-success kc-api-secret-alert",
-                            div { class: "kc-api-secret-topline",
-                                strong { {i18n.t("api_keys.created_title")} }
-                                span { {i18n.t("api_keys.created_once")} }
-                            }
-                            code { class: "key-display", "{key}" }
-                            p { class: "kc-api-secret-label", {i18n.t("api_keys.example")} }
-                            div { class: "kc-api-copy-block",
-                                pre {
-                                    class: if copied() { "kc-api-example copied" } else { "kc-api-example" },
-                                    title: if copied() { copied_label } else { copy_hint },
-                                    onclick: {
-                                        let text = example_text_for_click.clone();
-                                        move |_| {
-                                            copy_to_clipboard(&text);
-                                            copied.set(true);
-                                            // 2秒后重置状态
-                                            let mut copied_clone = copied.clone();
-                                            spawn(async move {
-                                                gloo_timers::future::TimeoutFuture::new(2000).await;
-                                                copied_clone.set(false);
-                                            });
-                                        }
-                                    },
-                                    "{example_text}"
+                        div { class: "kc-api-success-panel",
+                            div { class: "kc-api-success-head",
+                                div { class: "kc-api-success-icon", "✓" }
+                                div {
+                                    h2 { {i18n.t("api_keys.created_title")} }
+                                    p { {i18n.t("api_keys.created_once")} }
                                 }
-                                div { class: "kc-api-copy-hint",
-                                    if copied() {
-                                        {copied_label}
-                                    } else {
-                                        {copy_hint}
+                            }
+
+                            div { class: "kc-api-success-grid",
+                                section { class: "kc-api-model-panel",
+                                    h3 { {i18n.t("api_keys.models_title")} }
+                                    p {
+                                        {i18n.t("api_keys.models_desc_prefix")}
+                                        code { "API_MODEL" }
+                                        {i18n.t("api_keys.models_desc_suffix")}
+                                    }
+                                    div { class: "kc-api-model-list",
+                                        for (idx , model) in available_models.iter().take(6).enumerate() {
+                                            div { class: "kc-api-model-row",
+                                                span { class: "kc-api-model-name", "{model.id}" }
+                                                span { class: if idx == 0 { "kc-api-model-badge is-default" } else { "kc-api-model-badge" },
+                                                    if idx == 0 {
+                                                        {i18n.t("api_keys.default_model")}
+                                                    } else {
+                                                        "{model.owned_by}"
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    if available_models.len() > 6 {
+                                        p { class: "kc-api-model-more",
+                                            "+{available_models.len() - 6} {i18n.t(\"api_keys.more_models\")}"
+                                        }
+                                    }
+                                }
+
+                                section { class: "kc-api-example-panel",
+                                    h3 { {i18n.t("api_keys.quick_example")} }
+                                    p { {i18n.t("api_keys.quick_example_desc")} }
+
+                                    div { class: "kc-api-example-box",
+                                        div { class: "kc-api-example-protocols",
+                                            for (value , label) in [
+                                                ("openai", i18n.t("api_keys.example_protocol_openai")),
+                                                ("responses", i18n.t("api_keys.example_protocol_responses")),
+                                                ("anthropic", i18n.t("api_keys.example_protocol_anthropic")),
+                                            ]
+                                            {
+                                                button {
+                                                    class: if example_protocol() == value { "kc-api-example-protocol active" } else { "kc-api-example-protocol" },
+                                                    r#type: "button",
+                                                    onclick: move |_| {
+                                                        example_protocol.set(value.to_string());
+                                                        if value != "responses" && example_tab() == "websocket" {
+                                                            example_tab.set("env".to_string());
+                                                        }
+                                                        copied.set(false);
+                                                    },
+                                                    "{label}"
+                                                }
+                                            }
+                                        }
+                                        div { class: "kc-api-example-tabs",
+                                            for (value , label) in [
+                                                ("env", i18n.t("api_keys.example_env")),
+                                                (
+                                                    "python",
+                                                    if is_anthropic {
+                                                        i18n.t("api_keys.example_python_anthropic")
+                                                    } else {
+                                                        i18n.t("api_keys.example_python")
+                                                    },
+                                                ),
+                                                (
+                                                    "node",
+                                                    if is_anthropic {
+                                                        i18n.t("api_keys.example_node_anthropic")
+                                                    } else {
+                                                        i18n.t("api_keys.example_node")
+                                                    },
+                                                ),
+                                                ("curl", i18n.t("api_keys.example_curl")),
+                                                ("websocket", i18n.t("api_keys.example_websocket")),
+                                            ]
+                                            {
+                                                if value != "websocket" || is_responses {
+                                                button {
+                                                    class: if selected_tab == value { "kc-api-example-tab active" } else { "kc-api-example-tab" },
+                                                    r#type: "button",
+                                                    onclick: move |_| {
+                                                        example_tab.set(value.to_string());
+                                                        copied.set(false);
+                                                    },
+                                                    "{label}"
+                                                }
+                                                }
+                                            }
+                                        }
+                                        div { class: "kc-api-copy-block",
+                                            pre {
+                                                class: if copied() { "kc-api-example copied" } else { "kc-api-example" },
+                                                title: if copied() { copied_label } else { copy_hint },
+                                                "{example_text}"
+                                            }
+                                            button {
+                                                class: "kc-api-copy-button",
+                                                r#type: "button",
+                                                onclick: on_copy(example_text.clone(), copy_manual_hint.to_string(), ui_store, copied),
+                                                IconCopy { size: 15 }
+                                                if copied() {
+                                                    {copied_label}
+                                                } else {
+                                                    {i18n.t("api_keys.copy")}
+                                                }
+                                            }
+                                        }
+                                    }
+                                    p { class: "kc-api-secret-note",
+                                        if is_anthropic {
+                                            {anthropic_note}
+                                        } else {
+                                            {i18n.t("api_keys.example_note_prefix")}
+                                            code { "API_MODEL" }
+                                            {i18n.t("api_keys.example_note_suffix")}
+                                        }
                                     }
                                 }
                             }
-                            p { class: "kc-api-secret-note", {i18n.t("api_keys.example_note")} }
-                            Button {
-                                variant: ButtonVariant::Ghost,
-                                size: ButtonSize::Small,
-                                onclick: move |_| {
-                                    new_key_value.set(None);
-                                    copied.set(false);
-                                },
-                                {i18n.t("api_keys.close_saved")}
+                            div { class: "kc-api-success-actions",
+                                Button {
+                                    variant: ButtonVariant::Ghost,
+                                    size: ButtonSize::Small,
+                                    onclick: move |_| {
+                                        new_key_value.set(None);
+                                        copied.set(false);
+                                    },
+                                    {i18n.t("api_keys.close_saved")}
+                                }
                             }
                         }
                     }
@@ -216,18 +378,14 @@ API_MODEL="{}""#,
 
             // 创建弹窗
             if show_create() {
-                div {
-                    class: "modal-overlay",
-                    div {
-                        class: "modal",
+                div { class: "modal-overlay",
+                    div { class: "modal", role: "dialog", aria_modal: "true", aria_label: i18n.t("api_keys.create_title"),
                         h2 { class: "modal-title", {i18n.t("api_keys.create_title")} }
                         if let Some(err) = create_error() {
                             div { class: "alert alert-error", "{err}" }
                         }
-                        form {
-                            onsubmit: on_create,
-                            div {
-                                class: "form-group",
+                        form { onsubmit: on_create,
+                            div { class: "form-group",
                                 label { class: "form-label", {i18n.t("api_keys.name")} }
                                 input {
                                     class: "form-input",
@@ -237,8 +395,7 @@ API_MODEL="{}""#,
                                     oninput: move |e| new_key_name.set(e.value()),
                                 }
                             }
-                            div {
-                                class: "modal-actions",
+                            div { class: "modal-actions",
                                 Button {
                                     variant: ButtonVariant::Ghost,
                                     r#type: "button".to_string(),
@@ -249,12 +406,40 @@ API_MODEL="{}""#,
                                     variant: ButtonVariant::Primary,
                                     r#type: "submit".to_string(),
                                     loading: creating(),
-                                    if creating() { {i18n.t("api_keys.creating")} } else { {i18n.t("form.create")} }
+                                    if creating() {
+                                        {i18n.t("api_keys.creating")}
+                                    } else {
+                                        {i18n.t("form.create")}
+                                    }
                                 }
                             }
                         }
                     }
                 }
+            }
+
+            ConfirmModal {
+                open: delete_modal_open,
+                title: i18n.t("api_keys.delete_confirm_title").to_string(),
+                message: delete_candidate()
+                    .as_ref()
+                    .map(|(_, name)| i18n.t_with_args("api_keys.delete_confirm_message", &[("name", name)]))
+                    .unwrap_or_default(),
+                confirm_text: i18n.t("form.delete").to_string(),
+                cancel_text: i18n.t("form.cancel").to_string(),
+                close_label: i18n.t("common.close").to_string(),
+                danger: true,
+                onconfirm: move |_| {
+                    if let Some((id, _)) = delete_candidate() {
+                        on_delete(id);
+                    }
+                    delete_candidate.set(None);
+                    delete_modal_open.set(false);
+                },
+                oncancel: move |_| {
+                    delete_candidate.set(None);
+                    delete_modal_open.set(false);
+                },
             }
 
             match keys() {
@@ -284,7 +469,11 @@ API_MODEL="{}""#,
                                     col_count: 5,
                                     empty: true,
                                     empty_text: i18n.t("api_keys.empty").to_string(),
-                                    thead { tr { TableHead { "" } } }
+                                    thead {
+                                        tr {
+                                            TableHead { "" }
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -304,9 +493,7 @@ API_MODEL="{}""#,
                                         }
                                     }
                                 }
-                                Table {
-                                    class: "kc-api-table".to_string(),
-                                    col_count: 5,
+                                Table { class: "kc-api-table".to_string(), col_count: 5,
                                     thead {
                                         tr {
                                             TableHead { {i18n.t("table.name")} }
@@ -318,24 +505,32 @@ API_MODEL="{}""#,
                                     }
                                     tbody {
                                         for key in paged.iter() {
-                                            tr {
-                                                key: "{key.id}",
+                                            tr { key: "{key.id}",
                                                 td { class: "kc-api-key-name", "{key.name}" }
-                                                td { code { class: "kc-api-key-preview", "{key.key_preview}" } }
                                                 td {
-                                                    Badge {
-                                                        variant: if key.revoked() { BadgeVariant::Error } else { BadgeVariant::Success },
-                                                        if key.revoked() { {i18n.t("api_keys.revoked")} } else { {i18n.t("api_keys.active")} }
+                                                    code { class: "kc-api-key-preview", "{key.key_preview}" }
+                                                }
+                                                td {
+                                                    Badge { variant: if key.revoked() { BadgeVariant::Error } else { BadgeVariant::Success },
+                                                        if key.revoked() {
+                                                            {i18n.t("api_keys.revoked")}
+                                                        } else {
+                                                            {i18n.t("api_keys.active")}
+                                                        }
                                                     }
                                                 }
-                                                td { { format_time(&key.created_at) } }
+                                                td { {format_time(&key.created_at)} }
                                                 td {
                                                     Button {
                                                         variant: ButtonVariant::Danger,
                                                         size: ButtonSize::Small,
                                                         onclick: {
                                                             let id = key.id.to_string();
-                                                            move |_| on_delete(id.clone())
+                                                            let name = key.name.clone();
+                                                            move |_| {
+                                                                delete_candidate.set(Some((id.clone(), name.clone())));
+                                                                delete_modal_open.set(true);
+                                                            }
                                                         },
                                                         {i18n.t("form.delete")}
                                                     }
@@ -349,6 +544,8 @@ API_MODEL="{}""#,
                                     Pagination {
                                         current: page(),
                                         total_pages,
+                                        previous_label: i18n.t("table.previous").to_string(),
+                                        next_label: i18n.t("table.next").to_string(),
                                         on_page_change: move |p| page.set(p),
                                     }
                                 }

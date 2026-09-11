@@ -6,11 +6,8 @@
 //! - 高可用性
 //! - 连接池管理
 
-use crate::store::{RuntimeStore, StoreError, StoreResult};
 use deadpool_redis::redis::AsyncCommands;
-use deadpool_redis::{Config, Pool, Runtime};
-use std::future::Future;
-use std::pin::Pin;
+use deadpool_redis::{Config, Pool, Runtime, Timeouts};
 use std::time::Duration;
 
 /// Redis 存储错误
@@ -75,14 +72,8 @@ impl RedisRuntimeStore {
 
     /// 从配置创建存储
     pub fn from_config(config: &RedisPoolConfig) -> Result<Self, RedisStoreError> {
-        let mut cfg = Config::from_url(&config.url);
-        cfg.pool = Some(deadpool_redis::PoolConfig {
-            max_size: config.pool_size,
-            ..Default::default()
-        });
-        let pool = cfg
-            .create_pool(Some(Runtime::Tokio1))
-            .map_err(|e| RedisStoreError::CreatePoolError(e.to_string()))?;
+        let pool =
+            Self::create_pool_with_options(&config.url, config.pool_size, config.connect_timeout)?;
 
         Ok(Self {
             pool,
@@ -116,129 +107,61 @@ impl RedisRuntimeStore {
         Ok(())
     }
 
+    /// 从 URL 创建共享连接池（静态工厂）
+    ///
+    /// 供 `state.rs` 等调用方获取 Pool 后传递给多个消费者，
+    /// 避免外部模块直接依赖 `deadpool_redis::Config`。
+    pub fn create_pool(redis_url: &str) -> Result<Pool, RedisStoreError> {
+        let cfg = Config::from_url(redis_url);
+        cfg.create_pool(Some(Runtime::Tokio1))
+            .map_err(|e| RedisStoreError::CreatePoolError(e.to_string()))
+    }
+
+    /// 从 URL 和连接池参数创建共享连接池。
+    pub fn create_pool_with_options(
+        redis_url: &str,
+        pool_size: usize,
+        connect_timeout: Duration,
+    ) -> Result<Pool, RedisStoreError> {
+        let mut cfg = Config::from_url(redis_url);
+        cfg.pool = Some(deadpool_redis::PoolConfig {
+            max_size: pool_size,
+            timeouts: Timeouts {
+                create: Some(connect_timeout),
+                ..Timeouts::default()
+            },
+            ..Default::default()
+        });
+        cfg.create_pool(Some(Runtime::Tokio1))
+            .map_err(|e| RedisStoreError::CreatePoolError(e.to_string()))
+    }
+
+    /// 使用已有连接池创建存储
+    pub fn with_pool(pool: Pool) -> Self {
+        Self {
+            pool,
+            key_prefix: "keycompute:runtime".to_string(),
+            default_ttl: Duration::from_secs(300),
+        }
+    }
+
+    /// 使用已有连接池 + 自定义前缀
+    pub fn with_pool_and_prefix(pool: Pool, prefix: impl Into<String>) -> Self {
+        Self {
+            pool,
+            key_prefix: prefix.into(),
+            default_ttl: Duration::from_secs(300),
+        }
+    }
+
     /// 获取连接池状态
     pub fn pool_status(&self) -> deadpool_redis::Status {
         self.pool.status()
     }
-}
 
-impl RuntimeStore for RedisRuntimeStore {
-    fn get(
-        &self,
-        key: &str,
-    ) -> Pin<Box<dyn Future<Output = StoreResult<Option<String>>> + Send + '_>> {
-        let key = self.build_key(key);
-        let pool = self.pool.clone();
-
-        Box::pin(async move {
-            let mut conn = pool
-                .get()
-                .await
-                .map_err(|e| StoreError::ConnectionFailed(e.to_string()))?;
-
-            conn.get(&key)
-                .await
-                .map_err(|e| StoreError::OperationFailed(e.to_string()))
-        })
-    }
-
-    fn set(
-        &self,
-        key: &str,
-        value: &str,
-        ttl: Option<Duration>,
-    ) -> Pin<Box<dyn Future<Output = StoreResult<()>> + Send + '_>> {
-        let key = self.build_key(key);
-        let value = value.to_string();
-        let ttl = ttl.unwrap_or(self.default_ttl);
-        let pool = self.pool.clone();
-
-        Box::pin(async move {
-            let mut conn = pool
-                .get()
-                .await
-                .map_err(|e| StoreError::ConnectionFailed(e.to_string()))?;
-
-            conn.set_ex(&key, value, ttl.as_secs())
-                .await
-                .map_err(|e| StoreError::OperationFailed(e.to_string()))
-        })
-    }
-
-    fn del(&self, key: &str) -> Pin<Box<dyn Future<Output = StoreResult<()>> + Send + '_>> {
-        let key = self.build_key(key);
-        let pool = self.pool.clone();
-
-        Box::pin(async move {
-            let mut conn = pool
-                .get()
-                .await
-                .map_err(|e| StoreError::ConnectionFailed(e.to_string()))?;
-
-            conn.del(&key)
-                .await
-                .map_err(|e| StoreError::OperationFailed(e.to_string()))
-        })
-    }
-
-    fn incr(&self, key: &str) -> Pin<Box<dyn Future<Output = StoreResult<i64>> + Send + '_>> {
-        let key = self.build_key(key);
-        let pool = self.pool.clone();
-
-        Box::pin(async move {
-            let mut conn = pool
-                .get()
-                .await
-                .map_err(|e| StoreError::ConnectionFailed(e.to_string()))?;
-
-            conn.incr(&key, 1i64)
-                .await
-                .map_err(|e| StoreError::OperationFailed(e.to_string()))
-        })
-    }
-
-    fn decr(&self, key: &str) -> Pin<Box<dyn Future<Output = StoreResult<i64>> + Send + '_>> {
-        let key = self.build_key(key);
-        let pool = self.pool.clone();
-
-        Box::pin(async move {
-            let mut conn = pool
-                .get()
-                .await
-                .map_err(|e| StoreError::ConnectionFailed(e.to_string()))?;
-
-            conn.decr(&key, 1i64)
-                .await
-                .map_err(|e| StoreError::OperationFailed(e.to_string()))
-        })
-    }
-
-    fn expire(
-        &self,
-        key: &str,
-        ttl: Duration,
-    ) -> Pin<Box<dyn Future<Output = StoreResult<()>> + Send + '_>> {
-        let key = self.build_key(key);
-        let pool = self.pool.clone();
-
-        Box::pin(async move {
-            let mut conn = pool
-                .get()
-                .await
-                .map_err(|e| StoreError::ConnectionFailed(e.to_string()))?;
-
-            let result: i64 = conn
-                .expire(&key, ttl.as_secs() as i64)
-                .await
-                .map_err(|e| StoreError::OperationFailed(e.to_string()))?;
-
-            // Redis expire 返回 1 表示成功设置，0 表示键不存在
-            if result == 0 {
-                return Err(StoreError::KeyNotFound(key));
-            }
-
-            Ok(())
-        })
+    /// 获取 Redis 连接池引用
+    pub fn pool(&self) -> &Pool {
+        &self.pool
     }
 }
 
@@ -362,82 +285,16 @@ impl Default for RedisPoolConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicU64, Ordering};
 
-    static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
+    #[test]
+    fn configured_pool_uses_requested_size() {
+        let pool = RedisRuntimeStore::create_pool_with_options(
+            "redis://127.0.0.1:6379",
+            17,
+            Duration::from_secs(3),
+        )
+        .expect("pool construction should not require a live Redis server");
 
-    fn create_test_store() -> Option<RedisRuntimeStore> {
-        let test_id = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
-        let prefix = format!("keycompute:test:{}", test_id);
-
-        match RedisRuntimeStore::with_prefix("redis://127.0.0.1:6379", prefix) {
-            Ok(store) => Some(store),
-            Err(_) => {
-                eprintln!("Warning: Redis not available, skipping Redis tests");
-                None
-            }
-        }
-    }
-
-    #[tokio::test]
-    async fn test_redis_store_basic() {
-        let Some(store) = create_test_store() else {
-            return;
-        };
-
-        // 清理测试数据
-        let _ = store.flush_prefix().await;
-
-        // 测试 set/get
-        store.set("test_key", "test_value", None).await.unwrap();
-        let value = store.get("test_key").await.unwrap();
-        assert_eq!(value, Some("test_value".to_string()));
-
-        // 测试 del
-        store.del("test_key").await.unwrap();
-        let value = store.get("test_key").await.unwrap();
-        assert_eq!(value, None);
-    }
-
-    #[tokio::test]
-    async fn test_redis_store_incr_decr() {
-        let Some(store) = create_test_store() else {
-            return;
-        };
-
-        let _ = store.flush_prefix().await;
-
-        // 测试 incr
-        let count1 = store.incr("counter").await.unwrap();
-        assert_eq!(count1, 1);
-
-        let count2 = store.incr("counter").await.unwrap();
-        assert_eq!(count2, 2);
-
-        // 测试 decr
-        let count3 = store.decr("counter").await.unwrap();
-        assert_eq!(count3, 1);
-    }
-
-    #[tokio::test]
-    async fn test_redis_store_ttl() {
-        let Some(store) = create_test_store() else {
-            return;
-        };
-
-        let _ = store.flush_prefix().await;
-
-        // 设置带 TTL 的值
-        store
-            .set("ttl_key", "ttl_value", Some(Duration::from_secs(10)))
-            .await
-            .unwrap();
-
-        // 检查存在
-        assert!(store.exists("ttl_key").await);
-
-        // 检查 TTL
-        let ttl = store.ttl("ttl_key").await;
-        assert!(ttl > 0 && ttl <= 10);
+        assert_eq!(pool.status().max_size, 17);
     }
 }

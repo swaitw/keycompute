@@ -1,0 +1,384 @@
+//! LLM Protocol Provider
+//!
+//! llm-protocol 体系的基础抽象层：
+//! - `ProviderAdapter` trait：协议实现的统一上游调用接口
+//! - `ProtocolType`：系统仅支持 openai / anthropic 两种协议
+//! - 请求/流事件/HTTP 传输层类型
+
+use async_trait::async_trait;
+use futures::Stream;
+use keycompute_types::{KeyComputeError, Result, SensitiveString};
+use std::pin::Pin;
+
+pub mod http;
+pub mod protocol;
+pub mod request;
+pub mod stream;
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_support;
+
+pub use http::{
+    AdmittedResponseText, ByteStream, DefaultHttpTransport, GetBinaryResponse, HttpTransport,
+    LARGE_JSON_BODY_ADMISSION_BYTES, LARGE_JSON_WORKING_SET_ADMISSION_BYTES, LargeBodyPermit,
+    MAX_JSON_PASSTHROUGH_BODY_BYTES, MAX_JSON_PASSTHROUGH_ERROR_BODY_BYTES,
+    MAX_JSON_PASSTHROUGH_WORKING_SET_BYTES, UpstreamFailure, UpstreamFailureKind, UpstreamResponse,
+    UpstreamResponseMeta, body_read_failure, capture_http_failure_response,
+    collect_bounded_response_text, estimated_json_parse_working_set_bytes,
+    http_status_is_retryable, json_passthrough_body_limit, summarize_http_failure_response,
+    try_acquire_large_body_permit,
+};
+pub use protocol::{ProtocolType, normalize_base_url};
+pub use request::{NativeResponsesRequest, UpstreamMessage, UpstreamRequest};
+pub use stream::{LARGE_NATIVE_EVENT_CHANNEL_CAPACITY, NativeStreamEvent, StreamEvent};
+
+/// Provider 适配器 trait
+///
+/// 所有 LLM Provider 必须实现此 trait，提供统一的上游调用接口
+#[async_trait]
+pub trait ProviderAdapter: Send + Sync + std::fmt::Debug {
+    /// Provider 名称
+    fn name(&self) -> &'static str;
+
+    /// 支持的模型列表
+    fn supported_models(&self) -> Vec<&'static str>;
+
+    /// 检查是否支持指定模型
+    fn supports_model(&self, model: &str) -> bool {
+        self.supported_models().contains(&model)
+    }
+
+    /// 发起流式请求
+    ///
+    /// # 参数
+    /// - `transport`: HTTP 传输层，用于发送请求
+    /// - `request`: 上游请求
+    async fn stream_chat(
+        &self,
+        transport: &dyn HttpTransport,
+        request: UpstreamRequest,
+    ) -> Result<StreamBox>;
+
+    /// Structured variant used by the gateway tracing path. Legacy adapters
+    /// inherit a metadata-compatible wrapper; protocol adapters should override
+    /// it when their transport exposes real response headers.
+    async fn stream_chat_with_meta(
+        &self,
+        transport: &dyn HttpTransport,
+        request: UpstreamRequest,
+    ) -> std::result::Result<UpstreamResponse<StreamBox>, UpstreamFailure> {
+        self.stream_chat(transport, request)
+            .await
+            .map(|body| UpstreamResponse {
+                meta: UpstreamResponseMeta {
+                    status: 200,
+                    headers_received_at: chrono::Utc::now(),
+                    upstream_request_id: None,
+                    headers: Vec::new(),
+                },
+                body,
+            })
+            .map_err(|error| UpstreamFailure {
+                kind: UpstreamFailureKind::Protocol,
+                status: None,
+                headers_received_at: None,
+                upstream_request_id: None,
+                client_response: None,
+                retryable: error.is_retryable(),
+                stable_error_code: "upstream_protocol".to_string(),
+                sanitized_summary: keycompute_types::sanitize_error_summary(&error.to_string()),
+            })
+    }
+
+    /// 发起原生 OpenAI Responses 请求。
+    ///
+    /// Responses 使用独立入口，避免把它的原始 JSON、资源路径与协议头塞入
+    /// 通用 Chat Completions 请求。只有 OpenAI 协议适配器应覆盖此方法。
+    async fn stream_responses_with_meta(
+        &self,
+        _transport: &dyn HttpTransport,
+        _request: UpstreamRequest,
+        _native_request: NativeResponsesRequest,
+    ) -> std::result::Result<UpstreamResponse<StreamBox>, UpstreamFailure> {
+        Err(UpstreamFailure {
+            kind: UpstreamFailureKind::Protocol,
+            status: None,
+            headers_received_at: None,
+            upstream_request_id: None,
+            client_response: None,
+            retryable: false,
+            stable_error_code: "responses_protocol_unsupported".to_string(),
+            sanitized_summary: "selected provider does not support the Responses protocol"
+                .to_string(),
+        })
+    }
+
+    /// 非流式请求（默认通过 stream 实现）
+    async fn chat(
+        &self,
+        transport: &dyn HttpTransport,
+        request: UpstreamRequest,
+    ) -> Result<String> {
+        let mut stream = self.stream_chat(transport, request).await?;
+        let mut content = String::new();
+
+        use futures::StreamExt;
+        while let Some(event) = stream.next().await {
+            match event? {
+                StreamEvent::Delta { content: delta, .. } => {
+                    content.push_str(&delta);
+                }
+                StreamEvent::Done => break,
+                StreamEvent::Error { message } => {
+                    return Err(keycompute_types::KeyComputeError::ProviderError(message));
+                }
+                _ => {}
+            }
+        }
+
+        Ok(content)
+    }
+
+    /// 是否支持图片生成（默认不支持）
+    fn supports_image_generation(&self) -> bool {
+        false
+    }
+
+    /// 是否支持图片编辑（默认不支持）
+    fn supports_image_editing(&self) -> bool {
+        false
+    }
+
+    /// 获取上游模型列表（兼作连通性验证）
+    ///
+    /// 默认实现为 OpenAI 风格：`GET {base}/models` + Bearer 认证。
+    /// 非 Bearer 认证的协议（如 Anthropic 的 x-api-key）需覆盖此方法。
+    /// 两种协议的响应均为 `{"data": [{"id": ...}]}` 结构。
+    ///
+    /// # 参数
+    /// - `endpoint`: Base URL（不含路径，如 `https://api.openai.com/v1`）
+    /// - `api_key`: 上游 API Key
+    async fn list_models(
+        &self,
+        transport: &dyn HttpTransport,
+        endpoint: &str,
+        api_key: &SensitiveString,
+    ) -> Result<Vec<String>> {
+        let url = format!("{}/models", endpoint.trim_end_matches('/'));
+        let headers = vec![(
+            "Authorization".to_string(),
+            format!("Bearer {}", api_key.expose()),
+        )];
+        let response = transport
+            .get_binary_response(&url, headers)
+            .await
+            .map_err(UpstreamFailure::into_keycompute_error)?;
+        parse_models_response(&response.body.body)
+    }
+
+    /// 验证上游 API Key 连通性（用于渠道账号测试）
+    ///
+    /// 默认通过 `list_models` 实现，协议实现只需覆盖 `list_models`。
+    async fn verify_key(
+        &self,
+        transport: &dyn HttpTransport,
+        endpoint: &str,
+        api_key: &SensitiveString,
+    ) -> Result<()> {
+        self.list_models(transport, endpoint, api_key)
+            .await
+            .map(|_| ())
+    }
+}
+
+/// 解析上游 `/models` 接口响应，提取模型 ID 列表
+///
+/// openai 与 anthropic 协议的响应均为 `{"data": [{"id": ...}]}` 结构。
+///
+/// 合法的空列表 `{"data": []}` 表示连接正常但当前账号没有可列出的模型；
+/// 非法 JSON 或不符合该结构的响应则说明请求未到达兼容的 `/models` 端点，
+/// 必须令渠道连接测试失败，不能误报成功。
+pub fn parse_models_response(body: &[u8]) -> Result<Vec<String>> {
+    #[derive(serde::Deserialize)]
+    struct ModelsResponse {
+        data: Vec<Model>,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct Model {
+        id: String,
+    }
+
+    let response: ModelsResponse = serde_json::from_slice(body).map_err(|_| {
+        KeyComputeError::ProviderError(
+            "Invalid /models response: expected an object with a data array of model IDs"
+                .to_string(),
+        )
+    })?;
+
+    Ok(response.data.into_iter().map(|model| model.id).collect())
+}
+
+/// 流返回类型
+pub type StreamBox = Pin<Box<dyn Stream<Item = Result<StreamEvent>> + Send>>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::RecordingGetTransport;
+    use std::time::Duration;
+
+    #[derive(Debug)]
+    struct DefaultModelListAdapter;
+
+    #[derive(Debug)]
+    struct StructuredGetFailureTransport;
+
+    #[async_trait::async_trait]
+    impl HttpTransport for StructuredGetFailureTransport {
+        async fn post_json(
+            &self,
+            _url: &str,
+            _headers: Vec<(String, String)>,
+            _body: String,
+        ) -> Result<String> {
+            unreachable!()
+        }
+
+        async fn post_stream(
+            &self,
+            _url: &str,
+            _headers: Vec<(String, String)>,
+            _body: String,
+        ) -> Result<ByteStream> {
+            unreachable!()
+        }
+
+        fn request_timeout(&self) -> Duration {
+            Duration::from_secs(1)
+        }
+
+        fn stream_timeout(&self) -> Duration {
+            Duration::from_secs(1)
+        }
+
+        async fn get_binary_response(
+            &self,
+            _url: &str,
+            _headers: Vec<(String, String)>,
+        ) -> std::result::Result<UpstreamResponse<GetBinaryResponse>, UpstreamFailure> {
+            Err(UpstreamFailure {
+                kind: UpstreamFailureKind::HttpStatus,
+                status: Some(429),
+                headers_received_at: Some(chrono::Utc::now()),
+                upstream_request_id: Some("models-rate-limit".to_string()),
+                client_response: None,
+                retryable: true,
+                stable_error_code: "upstream_http_429".to_string(),
+                sanitized_summary: "rate limited".to_string(),
+            })
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl ProviderAdapter for DefaultModelListAdapter {
+        fn name(&self) -> &'static str {
+            "test"
+        }
+
+        fn supported_models(&self) -> Vec<&'static str> {
+            Vec::new()
+        }
+
+        async fn stream_chat(
+            &self,
+            _transport: &dyn HttpTransport,
+            _request: UpstreamRequest,
+        ) -> Result<StreamBox> {
+            Err(KeyComputeError::ProviderError("not used".into()))
+        }
+    }
+
+    #[test]
+    fn test_stream_event_serialization() {
+        let event = StreamEvent::Delta {
+            content: "Hello".to_string(),
+            finish_reason: None,
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("Hello"));
+    }
+
+    #[test]
+    fn test_parse_models_response_valid() {
+        let body = br#"{"data": [{"id": "gpt-4o"}, {"id": "gpt-4o-mini"}]}"#;
+        assert_eq!(
+            parse_models_response(body).unwrap(),
+            vec!["gpt-4o", "gpt-4o-mini"]
+        );
+    }
+
+    #[test]
+    fn test_parse_models_response_accepts_empty_model_list() {
+        assert!(
+            parse_models_response(br#"{"data": []}"#)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn test_parse_models_response_rejects_invalid_or_incompatible_responses() {
+        for body in [
+            b"not json".as_slice(),
+            br#"{"data": "oops"}"#,
+            br#"{"models": [{"id": "x"}]}"#,
+            br#"{"data": [{"name": "a"}]}"#,
+        ] {
+            assert!(parse_models_response(body).is_err());
+        }
+    }
+
+    #[test]
+    fn default_list_models_propagates_invalid_response() {
+        let transport = RecordingGetTransport::new(br#"{"data": "invalid"}"#.to_vec());
+        let adapter = DefaultModelListAdapter;
+        let api_key = SensitiveString::new("test-key");
+
+        let error = futures::executor::block_on(adapter.list_models(
+            &transport,
+            "https://provider.example/v1/",
+            &api_key,
+        ))
+        .unwrap_err();
+
+        assert!(matches!(error, KeyComputeError::ProviderError(_)));
+        assert_eq!(
+            transport.requests(),
+            vec![(
+                "https://provider.example/v1/models".to_string(),
+                vec![("Authorization".to_string(), "Bearer test-key".to_string())],
+            )]
+        );
+    }
+
+    #[test]
+    fn default_list_models_preserves_structured_http_failure() {
+        let adapter = DefaultModelListAdapter;
+        let error = futures::executor::block_on(adapter.list_models(
+            &StructuredGetFailureTransport,
+            "https://provider.example/v1",
+            &SensitiveString::new("test-key"),
+        ))
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            KeyComputeError::UpstreamFailure {
+                status: Some(429),
+                ref stable_code,
+                retryable: true,
+                ..
+            } if stable_code == "upstream_http_429"
+        ));
+    }
+}

@@ -1,5 +1,5 @@
 use dioxus::prelude::*;
-use ui::{Button, ButtonVariant};
+use ui::{Button, ButtonVariant, PageHeader};
 
 use crate::hooks::use_i18n::use_i18n;
 use crate::services::{api_client::with_auto_refresh, settings_service};
@@ -43,23 +43,23 @@ pub fn Settings() -> Element {
     let platform_name = get_val("site_name");
     let currency = get_val("default_currency");
     let min_recharge = get_val("min_recharge_amount");
+    let max_recharge = get_val("max_recharge_amount");
+    let alipay_enabled = get_val("alipay_enabled");
+    let wechatpay_enabled = get_val("wechatpay_enabled");
     let default_user_quota = get_val("default_user_quota");
     let jwt_expire = get_val("jwt_expire_hours");
     let distribution_enabled = get_val("distribution_enabled");
+    let page_description = if is_admin {
+        i18n.t("settings.admin_desc")
+    } else {
+        i18n.t("settings.user_desc")
+    };
 
     rsx! {
         div { class: "page-container settings-console-page",
-            div { class: "page-header",
-                div {
-                    h1 { class: "page-title", {i18n.t("page.settings")} }
-                    p { class: "page-description",
-                        if is_admin {
-                            {i18n.t("settings.admin_desc")}
-                        } else {
-                            {i18n.t("settings.user_desc")}
-                        }
-                    }
-                }
+            PageHeader {
+                title: i18n.t("page.settings").to_string(),
+                description: page_description.to_string(),
             }
 
             if !is_admin {
@@ -144,6 +144,48 @@ pub fn Settings() -> Element {
                                     save_ok,
                                     save_error,
                                     allow_negative: false
+                                }
+                                SettingItemNumber {
+                                    label: i18n.t("settings.max_recharge_label").to_string(),
+                                    description: i18n.t("settings.max_recharge_desc").to_string(),
+                                    setting_key: "max_recharge_amount",
+                                    value: max_recharge.clone(),
+                                    editable: is_admin,
+                                    auth_store,
+                                    save_ok,
+                                    save_error,
+                                    allow_negative: false
+                                }
+                            }
+                        }
+
+                        div { class: "settings-section-card",
+                            div { class: "settings-section-head",
+                                div {
+                                    h3 { class: "settings-section-title", {i18n.t("settings.payment_title")} }
+                                    p { class: "settings-section-description", {i18n.t("settings.payment_desc")} }
+                                }
+                            }
+                            div { class: "settings-section-body",
+                                SettingItemToggle {
+                                    label: i18n.t("recharge.alipay").to_string(),
+                                    description: i18n.t("settings.alipay_enabled_desc").to_string(),
+                                    setting_key: "alipay_enabled",
+                                    value: alipay_enabled.clone(),
+                                    editable: is_admin,
+                                    auth_store,
+                                    save_ok,
+                                    save_error
+                                }
+                                SettingItemToggle {
+                                    label: i18n.t("recharge.wechat_pay").to_string(),
+                                    description: i18n.t("settings.wechatpay_enabled_desc").to_string(),
+                                    setting_key: "wechatpay_enabled",
+                                    value: wechatpay_enabled.clone(),
+                                    editable: is_admin,
+                                    auth_store,
+                                    save_ok,
+                                    save_error
                                 }
                             }
                         }
@@ -502,6 +544,7 @@ fn SettingItemToggle(
                                 checked: is_enabled,
                                 onchange: move |e| {
                                     let new_val = if e.checked() { "true" } else { "false" };
+                                    let previous_value = edit_val();
                                     *edit_val.write() = new_val.to_string();
                                     let k = key.clone();
                                     let token = auth_store.token().unwrap_or_default();
@@ -520,6 +563,7 @@ fn SettingItemToggle(
                                                 *saving.write() = false;
                                             }
                                             Err(e) => {
+                                                *edit_val.write() = previous_value;
                                                 *save_error.write() =
                                                     format!("{} {}：{}", i18n.t("settings.save_failed"), k, e);
                                                 *saving.write() = false;

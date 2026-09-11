@@ -44,7 +44,7 @@ pub async fn get_current_user(
 ) -> Result<Json<CurrentUserResponse>> {
     let pool = state
         .pool
-        .as_ref()
+        .as_deref()
         .ok_or_else(|| ApiError::Internal("Database not configured".to_string()))?;
 
     let user = User::find_by_id(pool, auth.user_id)
@@ -76,10 +76,10 @@ pub async fn update_profile(
     auth: AuthExtractor,
     State(state): State<AppState>,
     Json(req): Json<UpdateProfileRequest>,
-) -> Result<Json<serde_json::Value>> {
+) -> Result<Json<CurrentUserResponse>> {
     let pool = state
         .pool
-        .as_ref()
+        .as_deref()
         .ok_or_else(|| ApiError::Internal("Database not configured".to_string()))?;
 
     let user = User::find_by_id(pool, auth.user_id)
@@ -97,12 +97,14 @@ pub async fn update_profile(
         .await
         .map_err(|e| ApiError::Internal(format!("Failed to update profile: {}", e)))?;
 
-    Ok(Json(serde_json::json!({
-        "success": true,
-        "message": "Profile updated",
-        "user_id": updated.id,
-        "name": updated.name,
-    })))
+    Ok(Json(CurrentUserResponse {
+        id: updated.id,
+        email: updated.email,
+        name: updated.name,
+        role: updated.role,
+        tenant_id: updated.tenant_id,
+        created_at: updated.created_at.to_rfc3339(),
+    }))
 }
 
 /// 修改密码请求
@@ -122,7 +124,7 @@ pub async fn change_password(
 ) -> Result<Json<serde_json::Value>> {
     let pool = state
         .pool
-        .as_ref()
+        .as_deref()
         .ok_or_else(|| ApiError::Internal("Database not configured".to_string()))?;
 
     // 1. 验证新密码格式
@@ -216,7 +218,7 @@ pub async fn list_my_api_keys(
 ) -> Result<Json<Vec<ApiKeyInfo>>> {
     let pool = state
         .pool
-        .as_ref()
+        .as_deref()
         .ok_or_else(|| ApiError::Internal("Database not configured".to_string()))?;
 
     let keys = if params.include_revoked {
@@ -277,7 +279,7 @@ pub async fn create_api_key(
 ) -> Result<Json<serde_json::Value>> {
     let pool = state
         .pool
-        .as_ref()
+        .as_deref()
         .ok_or_else(|| ApiError::Internal("Database not configured".to_string()))?;
 
     // 使用统一的 API Key 生成方法（格式：sk- + 48字符 = 51字符）
@@ -317,7 +319,7 @@ pub async fn create_api_key(
     })))
 }
 
-/// 删除 API Key（实际上是撤销）
+/// 删除 API Key
 ///
 /// DELETE /api/v1/keys/{id}
 pub async fn delete_api_key(
@@ -327,7 +329,7 @@ pub async fn delete_api_key(
 ) -> Result<Json<serde_json::Value>> {
     let pool = state
         .pool
-        .as_ref()
+        .as_deref()
         .ok_or_else(|| ApiError::Internal("Database not configured".to_string()))?;
 
     // 查找 API Key 并验证所有权
@@ -343,7 +345,22 @@ pub async fn delete_api_key(
         ));
     }
 
-    // 撤销 API Key
+    // 行为约定：
+    // - 活跃 Key：先撤销（保留审计痕迹）
+    // - 已撤销 Key：允许物理删除（便于用户清理列表）
+    if key.revoked {
+        key.delete(pool)
+            .await
+            .map_err(|e| ApiError::Internal(format!("Failed to delete API key: {}", e)))?;
+
+        return Ok(Json(serde_json::json!({
+            "success": true,
+            "message": "API Key deleted",
+            "key_id": key.id,
+            "deleted": true,
+        })));
+    }
+
     let revoked = key
         .revoke(pool)
         .await
@@ -354,6 +371,7 @@ pub async fn delete_api_key(
         "message": "API Key revoked",
         "key_id": revoked.id,
         "revoked_at": revoked.revoked_at.map(|t| t.to_rfc3339()),
+        "deleted": false,
     })))
 }
 
@@ -382,7 +400,7 @@ pub async fn get_my_usage(
 ) -> Result<Json<Vec<UsageRecord>>> {
     let pool = state
         .pool
-        .as_ref()
+        .as_deref()
         .ok_or_else(|| ApiError::Internal("Database not configured".to_string()))?;
 
     let logs = UsageLog::find_by_user(pool, auth.user_id, 100, 0)
@@ -427,7 +445,7 @@ pub async fn get_my_usage_stats(
 ) -> Result<Json<UsageStatsResponse>> {
     let pool = state
         .pool
-        .as_ref()
+        .as_deref()
         .ok_or_else(|| ApiError::Internal("Database not configured".to_string()))?;
 
     let stats = UsageLog::get_user_stats(pool, auth.user_id)

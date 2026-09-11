@@ -1,148 +1,292 @@
-# 贡献指南
+# Contributing Guide
 
-感谢你对 KeyCompute 项目的关注！我们欢迎各种形式的贡献，包括代码、文档、问题反馈和功能建议。
+Thank you for your interest in KeyCompute. Contributions are welcome across code, documentation, bug reports, feature requests, and project feedback.
 
-## 开发环境
+This guide is written for the current repository layout and workflow. If a command here conflicts with the codebase, follow the codebase and open a documentation fix.
 
-### 技术栈
+## Ways to Contribute
 
-- **后端**: Rust ≥ 1.92 + Axum 0.8 + Tokio
-- **前端**: Dioxus 0.7 (WASM)
-- **数据库**: PostgreSQL 16 + SQLx
-- **缓存/限流**: Redis 7
+- Fix bugs or improve existing behavior
+- Add tests for uncovered scenarios
+- Improve documentation and examples
+- Add or refine provider integrations
+- Report bugs, edge cases, or usability issues
+- Propose new features or architectural improvements
 
-### 环境准备
+## Before You Start
+
+- Read [README.md](README.md) for the product overview and local development commands.
+- Search existing issues and pull requests before starting duplicate work.
+- Keep changes focused. Small, reviewable pull requests are much easier to merge.
+
+## Development Environment
+
+### Stack
+
+- Backend: Rust, Axum, Tokio
+- Frontend: Dioxus 0.7
+- Database: PostgreSQL 16+
+- Cache / rate limiting: Redis 7+
+
+### Prerequisites
+
+- Rust stable toolchain
+- Docker and Docker Compose for local services
+- `dioxus-cli` for frontend development
+
+Install the Dioxus CLI if you plan to work on the web frontend:
 
 ```bash
-# 克隆项目
-git clone https://github.com/aiqubits/keycompute.git
+curl -sSL http://dioxus.dev/install.sh | sh
+```
+
+## Local Setup
+
+### Option 1: Run the full Docker Compose stack
+
+This is the easiest way to get the project running end to end.
+
+```bash
+git clone https://github.com/keycompute/keycompute.git
 cd keycompute
 
-# 安装 Rust (如未安装)
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-
-# 安装 dioxus-cli (前端开发需要)
-curl -sSL http://dioxus.dev/install.sh | sh
-
-# 启动依赖服务 (PostgreSQL + Redis)
-docker compose up -d postgres redis
-```
-
-### 本地开发
-
-```bash
-# 复制环境变量配置
 cp .env.example .env
-# 编辑 .env 填入必要的配置
+# Edit .env and replace all placeholder secrets before real deployments
 
-# 启动后端服务
-cargo run -p keycompute-server --features redis
-
-# 启动前端开发服务器 (另一个终端)
-cd packages/web && dx serve
+docker compose up -d
 ```
 
-## 代码规范
+### Option 2: Run backend and frontend locally
 
-### Rust 代码
+Use this setup when you want a faster edit / run loop.
+
+1. Copy the local config template:
 
 ```bash
-# 格式化代码
-cargo fmt --all
+cp config.example.toml config.toml
+```
 
-# 运行 Clippy 检查
+An ordinary `cargo run` creates a debug binary, which is always in development
+mode. It reads only `config.toml`, listens on `0.0.0.0`, and may use the public
+local credentials shown in the template.
+`.env.example` and `KC__*` variables are Compose inputs; do not source `.env`
+for this `cargo run` workflow.
+
+2. Start the local dependencies:
+
+```bash
+docker compose --env-file .env.example -f docker-compose.yml -f docker-compose.dev.yml up -d postgres redis
+```
+
+3. Start the backend:
+
+```bash
+cargo run -p keycompute-server
+```
+
+4. Start the web frontend in another terminal:
+
+```bash
+dx serve --package web --platform web --hot-reload true --addr 0.0.0.0
+```
+
+Notes:
+
+- The backend initializes the embedded schema on startup. Database upgrades are intentionally unsupported: recreate the database after schema changes.
+- `config.toml` is the only application configuration source for an ordinary
+  debug `cargo run`; `KC__*` and `APP_BASE_URL` do not override it. A release
+  binary (including the Docker image) is always production, reads environment
+  variables, and ignores `config.toml`. There is no runtime mode setting.
+- If you work on password reset emails or public invite links, set
+  `app_base_url` in local `config.toml`; release deployments use `APP_BASE_URL`.
+
+## Project Structure
+
+```text
+keycompute/
+├── crates/
+│   ├── keycompute-server/          # Axum HTTP service entrypoint
+│   ├── keycompute-db/              # Database access and new-database schema initialization
+│   ├── keycompute-auth/            # Authentication and authorization
+│   ├── keycompute-routing/         # Model and account routing
+│   ├── keycompute-billing/         # Billing and settlement
+│   ├── keycompute-distribution/    # Referral distribution
+│   ├── keycompute-runtime/         # Runtime state and store backends
+│   ├── keycompute-config/          # Config loading and validation
+│   ├── keycompute-observability/   # Logging and metrics
+│   ├── keycompute-emailserver/     # Email delivery
+│   ├── llm-gateway/                # Provider execution gateway
+│   └── llm-protocol/               # Protocol adapters (openai / anthropic)
+├── packages/
+│   ├── web/                        # Dioxus web app
+│   ├── ui/                         # Shared UI components
+│   ├── client-api/                 # Client API package and tests
+│   ├── desktop/                    # Dioxus desktop app
+│   └── mobile/                     # Dioxus mobile app
+├── nginx/                          # Reverse proxy config
+├── docker-compose.yml             # Production stack
+├── docker-compose.dev.yml         # Local dependency ports
+├── docker-compose.replicas.yml    # Production read replicas
+└── .github/workflows/             # CI checks
+```
+
+## Code Quality Checks
+
+Please run the same core checks used by CI before opening a pull request.
+
+### Formatting
+
+```bash
+cargo fmt --all --check
+```
+
+### Linting
+
+```bash
 cargo clippy --workspace --exclude desktop --exclude mobile --all-targets --all-features --future-incompat-report -- -D warnings
-
-# 运行测试
-cargo test --lib --workspace --exclude desktop --exclude mobile
 ```
 
-### 提交规范
+### Tests
 
-- 使用清晰的提交信息，说明**做了什么**和**为什么**
-- 一个提交只完成一个逻辑变更
-- 提交信息使用中文或英文，保持统一
-
-示例：
-```
-feat: 添加 DeepSeek Provider 支持
-
-- 实现 DeepSeek API 客户端
-- 添加流式响应处理
-- 更新文档
+```bash
+cargo test --lib --workspace --exclude desktop --exclude mobile --verbose
+cargo test --package client-api --tests --verbose
+cargo test --package integration-tests --tests --verbose
 ```
 
-## 架构原则
+### Optional build check
 
-### 模块依赖
-
-```
-keycompute-server (入口)
-    ↓
-llm-gateway / keycompute-auth / keycompute-billing / ... (业务层)
-    ↓
-keycompute-db / keycompute-runtime (基础设施层)
-    ↓
-keycompute-types (基础类型)
+```bash
+cargo build --workspace --exclude desktop --exclude mobile --verbose
 ```
 
-**原则**: 上层模块可以依赖下层模块，禁止反向依赖。
+If your change touches `desktop` or `mobile`, run the relevant package commands in addition to the shared workspace checks.
 
-### 新增 Provider
+## Contribution Expectations
 
-如需添加新的 LLM Provider：
+### Rust and backend changes
 
-1. 在 `crates/llm-provider/` 下创建新 crate
-2. 实现 `keycompute-provider-trait` 中的 trait
-3. 在 `llm-gateway` 中注册 Provider
-4. 添加对应的测试用例
+- Follow the existing crate boundaries and dependency direction.
+- Prefer small, composable changes over broad refactors.
+- Add or update tests when behavior changes.
+- Keep logging and error messages actionable.
 
-### 数据库变更
+### Example security configuration policy
 
-1. 在 `crates/keycompute-db/src/migrations/` 添加迁移文件
-2. 在 `crates/keycompute-db/src/models/` 更新模型
-3. 运行 `cargo run --bin migration` 应用迁移
+- `.env.example`, `config.example.toml`, and the fallback values in the Compose
+  files are development examples. Operators must override them for production.
+- Production startup always rejects a blank/default JWT secret (minimum 32
+  bytes) and a missing or invalid Provider API-key encryption key (Base64 for
+  exactly 32 bytes). When Redis enables Node Gateway, it also rejects a
+  blank/default node-registration secret shorter than 16 bytes. Only the first
+  `system` administrator bootstrap requires a non-default, non-blank password
+  of at least 12 characters; later restarts may omit that one-time secret.
+- PostgreSQL, Redis, SMTP, and payment example credentials are not covered by
+  the application placeholder checks. Operators must still replace them for
+  production. Keep code, templates, and tests aligned with this contract.
+- New example credentials must be clearly marked, remain overridable through
+  documented configuration, and have tests that keep code, templates, and
+  Compose fallbacks aligned.
 
-## 提交 Pull Request
+### Frontend changes
 
-1. **Fork 仓库** 并创建你的分支 (`git checkout -b feature/amazing-feature`)
-2. **提交变更** (`git commit -m 'feat: 添加某个功能'`)
-3. **推送到分支** (`git push origin feature/amazing-feature`)
-4. **创建 Pull Request**
+- This repository uses Dioxus 0.7. Do not introduce older Dioxus APIs.
+- Keep shared UI logic in `packages/ui` when it is platform-agnostic.
+- Keep web-specific dependencies and behavior in `packages/web`.
 
-### PR 检查清单
+### Database changes
 
-- [ ] 代码通过 `cargo clippy` 检查
-- [ ] 代码通过 `cargo fmt` 格式化
-- [ ] 新增功能包含测试用例
-- [ ] 所有测试通过
-- [ ] 文档已更新（如需要）
+- Update `crates/keycompute-db/migrations/001_init.sql`; it is the complete
+  schema and the only SQL source of truth for fresh deployments.
+- Update the relevant data models and query code in `crates/keycompute-db/src/models/`.
+- Recreate the database after changing the baseline; incremental upgrades,
+  compatibility migrations, and old-data backfills are not supported.
+- Verify the server can initialize an empty database and boot cleanly.
 
-## 报告问题
+### Adding a new provider
 
-### Bug 报告
+Most vendors (DeepSeek, Ollama, vLLM, Gemini OpenAI-compat, etc.) do NOT need
+new code: create a channel account with the matching protocol (`openai` or
+`anthropic`) plus the vendor's base URL and API key.
 
-请包含以下信息：
+Only when integrating a genuinely new wire protocol:
 
-- 问题描述
-- 复现步骤
-- 期望行为 vs 实际行为
-- 环境信息（OS、Rust 版本等）
-- 相关日志或错误信息
+1. Create a protocol crate under `crates/llm-protocol/`.
+2. Implement the `ProviderAdapter` trait from `llm-protocol-provider`.
+3. Add the protocol to `ProtocolType` and register it in `keycompute-server`
+   (`providers.rs`) and any required routing wiring.
+4. Add tests for request mapping, stream parsing, error handling, and any
+   protocol-specific behavior.
 
-### 功能建议
+## Commits
 
-请描述：
+- Use clear commit messages that explain what changed and why.
+- Keep one logical change per commit whenever practical.
+- Prefer English commit messages for consistency across the repository.
 
-- 功能的使用场景
-- 期望的行为
-- 可能的实现思路（可选）
+Example:
 
-## 社区交流
+```text
+feat: add DeepSeek provider streaming support
 
-- **Issue 讨论**: 使用 GitHub Issues 进行功能讨论
-- **问题反馈**: 发现 Bug 请提交 Issue
+- implement provider client
+- normalize streaming chunks
+- add tests and update docs
+```
 
-## 许可证
+## Pull Requests
 
-通过提交代码，你同意你的贡献将采用与项目相同的 [MIT 许可证](LICENSE)。
+### Submission flow
+
+1. Fork the repository and create a branch from `main`.
+2. Make your changes and run the relevant checks.
+3. Push your branch.
+4. Open a pull request with a clear description.
+
+### PR checklist
+
+- [ ] The code is formatted with `cargo fmt`
+- [ ] `cargo clippy` passes for the affected scope
+- [ ] Relevant tests were added or updated
+- [ ] Relevant test suites pass locally
+- [ ] Documentation was updated when behavior or setup changed
+
+### PR description tips
+
+Include:
+
+- What changed
+- Why it changed
+- How it was tested
+- Any follow-up work or known limitations
+
+Screenshots or API examples are helpful for UI and behavior changes.
+
+## Reporting Bugs
+
+Please include:
+
+- A clear description of the problem
+- Steps to reproduce
+- Expected behavior and actual behavior
+- Environment details such as OS, Rust version, and how you started the app
+- Relevant logs, traces, screenshots, or error messages
+
+## Suggesting Features
+
+Please describe:
+
+- The use case
+- The expected behavior
+- Why the feature would be valuable
+- Any proposed implementation direction if you already have one
+
+## Community and Communication
+
+- Use GitHub Issues for bug reports and feature discussions
+- Use pull requests for concrete code and documentation changes
+- If you find inaccurate docs, documentation-only pull requests are welcome
+
+## License
+
+By contributing to this repository, you agree that your contributions will be licensed under the same [MIT License](LICENSE) that covers the project.

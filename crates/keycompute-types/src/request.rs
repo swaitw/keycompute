@@ -1,10 +1,43 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::fmt;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock, Weak};
+use tokio::sync::watch;
+use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
-use crate::{PricingSnapshot, UsageAccumulator};
+use crate::{ExecutionTarget, PricingSnapshot, RequestExecutionFailure, UsageAccumulator};
+
+/// Client-visible HTTP failure returned by a native upstream protocol.
+///
+/// The body is intentionally kept out of `Debug` output: provider error
+/// payloads can echo request fragments. Responses handlers use this value only
+/// to reproduce the final upstream HTTP status, allowlisted headers and body.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct ClientUpstreamResponse {
+    pub status: u16,
+    pub headers: Vec<(String, String)>,
+    pub body: String,
+}
+
+impl fmt::Debug for ClientUpstreamResponse {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ClientUpstreamResponse")
+            .field("status", &self.status)
+            .field(
+                "headers",
+                &self
+                    .headers
+                    .iter()
+                    .map(|(name, _)| name)
+                    .collect::<Vec<_>>(),
+            )
+            .field("body", &"<redacted>")
+            .finish()
+    }
+}
 
 /// 请求上下文：贯穿全链路的唯一状态载体
 ///
@@ -13,9 +46,14 @@ use crate::{PricingSnapshot, UsageAccumulator};
 /// - 通过 `add_output_tokens()` 和 `set_input_tokens()` 方法安全地更新用量
 /// - 使用 `usage_snapshot()` 获取当前用量快照
 /// - `provider` 字段在路由确定后被设置，用于精确的定价查询
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct RequestContext {
     pub request_id: Uuid,
+    /// Stable identity used by the immutable billing ledger and TPM
+    /// deduplication. It normally equals `request_id`; an ingress that offers
+    /// end-to-end idempotency may bind retries to the first request's value
+    /// while retaining a fresh trace `request_id` for every HTTP attempt.
+    pub billing_request_id: Uuid,
     pub user_id: Uuid,
     pub tenant_id: Uuid,
     pub produce_ai_key_id: Uuid,
@@ -24,13 +62,195 @@ pub struct RequestContext {
     pub provider: Option<String>,
     pub messages: Vec<Message>,
     pub stream: bool,
+    /// 客户端在请求中指定的最大输出 token 数；未指定时保持 `None`。
+    pub max_tokens: Option<u32>,
+    /// 客户端指定的温度参数（透传给上游协议层）
+    pub temperature: Option<f32>,
+    /// 客户端指定的 Top P 参数（透传给上游协议层）
+    pub top_p: Option<f32>,
+    /// 原生 OpenAI Chat Completions 请求。
+    ///
+    /// 该字段只在 `/v1/chat/completions` 入站时设置。工具调用、结构化输出、
+    /// developer 消息等官方字段无法无损投影到通用 `Message`，因此 Provider
+    /// 账号路径保留经入口校验的完整 JSON，并在协议适配器中只覆盖路由字段。
+    pub native_openai_chat_request: Option<Arc<serde_json::Value>>,
+    /// 原生 Anthropic Messages 请求。
+    ///
+    /// 该字段只在 `/v1/messages` 入站时设置。它保留客户端的完整请求体，
+    /// 使工具调用、thinking、prompt cache 等协议字段不会在路由前被
+    /// `MessageContent` 的通用表示丢弃；仅 Anthropic 上游适配器可以消费它。
+    /// 通过 `Arc` 共享给执行器。原生多模态请求可能很大，克隆上下文时不能
+    /// 复制整个请求体。
+    pub native_anthropic_request: Option<Arc<serde_json::Value>>,
+    /// 经白名单筛选、可安全透传给 Anthropic 上游的协议头。
+    pub native_anthropic_headers: BTreeMap<String, String>,
+    /// 原生 OpenAI Responses 请求。
+    ///
+    /// 该字段只在 `/v1/responses` 入站时设置。Responses API 的输入、工具、
+    /// 推理、结构化输出等字段比通用 `Message` 丰富，必须保留完整 JSON，避免
+    /// 协议转换静默丢失字段。大型多模态 payload 通过 `Arc` 在执行链中共享。
+    pub native_openai_responses_request: Option<Arc<serde_json::Value>>,
+    /// Upstream Responses resource path for the native request. The public
+    /// create endpoint uses `/responses`; compaction uses `/responses/compact`.
+    pub native_openai_responses_path: Option<String>,
+    /// 经白名单筛选、可安全透传给 OpenAI Responses 上游的协议头。
+    pub native_openai_responses_headers: BTreeMap<String, String>,
+    /// 实际完成请求的 Provider 账号。
+    ///
+    /// 网关在向 handler 发出终止事件前写入该值。这样当 primary 在尚未
+    /// 向客户端提交内容时发生 fallback，结算仍会归属到真正执行成功的账号。
+    executed_provider_account: Arc<RwLock<Option<ExecutedProviderAccount>>>,
+    /// 当前 usage 快照所属的 Provider 账号。
+    ///
+    /// 该值在上游接受请求并返回成功响应头、executor 即将为本次尝试重置
+    /// usage 时更新。它与 `executed_provider_account` 分离：fallback 即使在
+    /// 产生部分用量后断流，也必须把该部分账单归属到 fallback 账号，但不能
+    /// 被误标记为“成功完成请求”。
+    usage_provider_account: Arc<RwLock<Option<ExecutedProviderAccount>>>,
+    /// Provider target whose HTTP response was accepted for the current attempt.
+    ///
+    /// Unlike `executed_provider_account`, this is recorded before the response
+    /// stream reaches `Done`. Background Responses can therefore retain the exact
+    /// endpoint and credential that created a queued resource. `ExecutionTarget`
+    /// redacts its credential in every diagnostic representation.
+    accepted_execution_target: Arc<RwLock<Option<ExecutionTarget>>>,
+    /// One-way signal that an upstream returned a successful HTTP status.
+    /// Streaming handlers may commit their protocol response after this point
+    /// without waiting for the first model event.
+    upstream_response_accepted: CancellationToken,
+    /// 客户端是否已断开（仅流式路径使用）。
+    ///
+    /// OpenAI 与 Anthropic 的后台结算任务会继续持有 executor receiver，确保
+    /// 断流后仍能完成一次结算。因此不能只依赖 `tx.is_closed()`；handler 必须
+    /// 通过这个可等待的取消令牌通知 executor 立即终止当前上游流和 fallback。
+    client_disconnect: CancellationToken,
+    /// Handler 对客户端响应的最终处理结果。
+    ///
+    /// Provider 的 `Done` 只代表上游 attempt 完成；非流式响应仍可能校验失败，
+    /// 流式响应也可能在终止帧写入前断开。handler 用第一个结果关闭 request trace，
+    /// executor 只负责 attempt 生命周期。
+    client_response_outcome: watch::Sender<Option<ClientResponseOutcome>>,
+    /// Final execution failure waiting for the response handler to decide the
+    /// client-visible request outcome.
+    execution_failure: Arc<RwLock<Option<RequestExecutionFailure>>>,
+    /// Last native-protocol HTTP error. Each fallback attempt replaces this
+    /// value; a successful attempt clears it before producing client content.
+    client_upstream_response: Arc<RwLock<Option<ClientUpstreamResponse>>>,
+    /// Headers from the accepted native-protocol HTTP response. The protocol
+    /// handler applies its own allowlist before exposing these to the client.
+    client_upstream_response_headers: Arc<RwLock<Vec<(String, String)>>>,
+    /// Ownership generation for the durable balance reservation attached to
+    /// this logical billing request. Settlement must present this token so a
+    /// late attempt cannot consume a newer retry's frozen funds.
+    balance_reservation_owner_token: Arc<RwLock<Option<Uuid>>>,
+    /// Predicted tokens held by this request's TPM reservation. Durable
+    /// background settlement persists this value so it can restore the same
+    /// already-admitted lease after a process restart.
+    tpm_reservation_tokens: Arc<RwLock<Option<u32>>>,
+    /// Shared lifetime sentinel for the active TPM lease heartbeat. Request
+    /// clones used by detached settlement workers retain the strong reference;
+    /// the heartbeat itself only receives a `Weak`, so it cannot keep an
+    /// abandoned request alive forever.
+    tpm_reservation_lifetime: Arc<()>,
+    /// Explicit terminal signal shared by every clone of this request. A
+    /// successful reconcile/release can stop the heartbeat immediately instead
+    /// of waiting for its next backend probe.
+    tpm_reservation_heartbeat_stop: CancellationToken,
     pub pricing_snapshot: PricingSnapshot, // 请求开始时固化
     usage: Arc<UsageAccumulator>,          // streaming 中累积（共享状态）
     pub started_at: DateTime<Utc>,
 }
 
+impl fmt::Debug for RequestContext {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("RequestContext")
+            .field("request_id", &self.request_id)
+            .field("billing_request_id", &self.billing_request_id)
+            .field("user_id", &self.user_id)
+            .field("tenant_id", &self.tenant_id)
+            .field("produce_ai_key_id", &self.produce_ai_key_id)
+            .field("model", &self.model)
+            .field("provider", &self.provider)
+            .field("messages", &self.messages)
+            .field("stream", &self.stream)
+            .field("max_tokens", &self.max_tokens)
+            .field("temperature", &self.temperature)
+            .field("top_p", &self.top_p)
+            // 原生 body 可能包含 base64 图片、工具输入和用户原文；禁止在
+            // Debug/诊断输出中展开它，但保留是否存在的信息便于排查路由。
+            .field(
+                "native_openai_chat_request",
+                &self
+                    .native_openai_chat_request
+                    .as_ref()
+                    .map(|_| "<redacted>"),
+            )
+            .field(
+                "native_anthropic_request",
+                &self.native_anthropic_request.as_ref().map(|_| "<redacted>"),
+            )
+            .field("native_anthropic_headers", &self.native_anthropic_headers)
+            .field(
+                "native_openai_responses_request",
+                &self
+                    .native_openai_responses_request
+                    .as_ref()
+                    .map(|_| "<redacted>"),
+            )
+            .field(
+                "native_openai_responses_path",
+                &self.native_openai_responses_path,
+            )
+            .field(
+                "native_openai_responses_headers",
+                &self
+                    .native_openai_responses_headers
+                    .keys()
+                    .collect::<Vec<_>>(),
+            )
+            .field("executed_provider_account", &self.executed_provider_account)
+            .field("usage_provider_account", &self.usage_provider_account)
+            .field(
+                "accepted_execution_target",
+                &self
+                    .accepted_execution_target()
+                    .as_ref()
+                    .map(|_| "<redacted>"),
+            )
+            .field(
+                "upstream_response_accepted",
+                &self.is_upstream_response_accepted(),
+            )
+            .field("client_disconnected", &self.is_client_disconnected())
+            .field("client_response_outcome", &self.client_response_outcome())
+            .field(
+                "execution_failure",
+                &self
+                    .execution_failure()
+                    .map(|failure| (failure.status, failure.error.code)),
+            )
+            // The ownership token is an internal compare-and-swap capability;
+            // expose only whether one has been bound in diagnostics.
+            .field(
+                "has_balance_reservation_owner_token",
+                &self.balance_reservation_owner_token().is_some(),
+            )
+            .field("tpm_reservation_tokens", &self.tpm_reservation_tokens())
+            .field("pricing_snapshot", &self.pricing_snapshot)
+            .field("usage", &self.usage)
+            .field("started_at", &self.started_at)
+            .finish()
+    }
+}
+
 impl RequestContext {
+    // Keep the immutable request identity and execution inputs explicit at call sites. Grouping
+    // these fields only to satisfy Clippy would obscure construction and churn every protocol,
+    // routing, billing, and integration-test caller.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
+        request_id: Uuid,
         user_id: Uuid,
         tenant_id: Uuid,
         produce_ai_key_id: Uuid,
@@ -39,8 +259,10 @@ impl RequestContext {
         stream: bool,
         pricing_snapshot: PricingSnapshot,
     ) -> Self {
+        let (client_response_outcome, _) = watch::channel(None);
         Self {
-            request_id: Uuid::new_v4(),
+            request_id,
+            billing_request_id: request_id,
             user_id,
             tenant_id,
             produce_ai_key_id,
@@ -48,10 +270,133 @@ impl RequestContext {
             provider: None,
             messages,
             stream,
+            max_tokens: None,
+            temperature: None,
+            top_p: None,
+            native_openai_chat_request: None,
+            native_anthropic_request: None,
+            native_anthropic_headers: BTreeMap::new(),
+            native_openai_responses_request: None,
+            native_openai_responses_path: None,
+            native_openai_responses_headers: BTreeMap::new(),
+            executed_provider_account: Arc::new(RwLock::new(None)),
+            usage_provider_account: Arc::new(RwLock::new(None)),
+            accepted_execution_target: Arc::new(RwLock::new(None)),
+            upstream_response_accepted: CancellationToken::new(),
+            client_disconnect: CancellationToken::new(),
+            client_response_outcome,
+            execution_failure: Arc::new(RwLock::new(None)),
+            client_upstream_response: Arc::new(RwLock::new(None)),
+            client_upstream_response_headers: Arc::new(RwLock::new(Vec::new())),
+            balance_reservation_owner_token: Arc::new(RwLock::new(None)),
+            tpm_reservation_tokens: Arc::new(RwLock::new(None)),
+            tpm_reservation_lifetime: Arc::new(()),
+            tpm_reservation_heartbeat_stop: CancellationToken::new(),
             pricing_snapshot,
             usage: Arc::new(UsageAccumulator::new()),
             started_at: Utc::now(),
         }
+    }
+
+    /// Clone the shared execution and billing state without retaining request
+    /// messages or native protocol bodies. Long-lived settlement workers only
+    /// need identity, usage, pricing, accepted-target and protocol-header state;
+    /// copying projected messages can otherwise duplicate a large request for
+    /// the lifetime of the worker.
+    pub fn clone_without_request_payloads(&self) -> Self {
+        Self {
+            request_id: self.request_id,
+            billing_request_id: self.billing_request_id,
+            user_id: self.user_id,
+            tenant_id: self.tenant_id,
+            produce_ai_key_id: self.produce_ai_key_id,
+            model: self.model.clone(),
+            provider: self.provider.clone(),
+            messages: Vec::new(),
+            stream: self.stream,
+            max_tokens: self.max_tokens,
+            temperature: self.temperature,
+            top_p: self.top_p,
+            native_openai_chat_request: None,
+            native_anthropic_request: None,
+            native_anthropic_headers: self.native_anthropic_headers.clone(),
+            native_openai_responses_request: None,
+            native_openai_responses_path: self.native_openai_responses_path.clone(),
+            native_openai_responses_headers: self.native_openai_responses_headers.clone(),
+            executed_provider_account: Arc::clone(&self.executed_provider_account),
+            usage_provider_account: Arc::clone(&self.usage_provider_account),
+            accepted_execution_target: Arc::clone(&self.accepted_execution_target),
+            upstream_response_accepted: self.upstream_response_accepted.clone(),
+            client_disconnect: self.client_disconnect.clone(),
+            client_response_outcome: self.client_response_outcome.clone(),
+            execution_failure: Arc::clone(&self.execution_failure),
+            client_upstream_response: Arc::clone(&self.client_upstream_response),
+            client_upstream_response_headers: Arc::clone(&self.client_upstream_response_headers),
+            balance_reservation_owner_token: Arc::clone(&self.balance_reservation_owner_token),
+            tpm_reservation_tokens: Arc::clone(&self.tpm_reservation_tokens),
+            tpm_reservation_lifetime: Arc::clone(&self.tpm_reservation_lifetime),
+            tpm_reservation_heartbeat_stop: self.tpm_reservation_heartbeat_stop.clone(),
+            pricing_snapshot: self.pricing_snapshot.clone(),
+            usage: Arc::clone(&self.usage),
+            started_at: self.started_at,
+        }
+    }
+
+    /// Bind billing and terminal token accounting to a stable logical request.
+    pub fn set_billing_request_id(&mut self, billing_request_id: Uuid) {
+        self.billing_request_id = billing_request_id;
+    }
+
+    /// Bind the durable reservation ownership generation before dispatch.
+    ///
+    /// Clones used by detached settlement workers share this value. A retry
+    /// gets a fresh `RequestContext` and therefore cannot inherit the previous
+    /// attempt's token.
+    pub fn set_balance_reservation_owner_token(&self, owner_token: Uuid) {
+        if let Ok(mut bound) = self.balance_reservation_owner_token.write() {
+            *bound = Some(owner_token);
+        }
+    }
+
+    /// Return the ownership generation required to settle frozen funds.
+    pub fn balance_reservation_owner_token(&self) -> Option<Uuid> {
+        self.balance_reservation_owner_token
+            .read()
+            .ok()
+            .and_then(|bound| *bound)
+    }
+
+    /// Bind the exact prediction admitted by the TPM limiter.
+    pub fn set_tpm_reservation_tokens(&self, tokens: u32) {
+        if let Ok(mut bound) = self.tpm_reservation_tokens.write() {
+            *bound = Some(tokens);
+        }
+    }
+
+    /// Return the exact prediction owned by this request's TPM lease.
+    pub fn tpm_reservation_tokens(&self) -> Option<u32> {
+        self.tpm_reservation_tokens
+            .read()
+            .ok()
+            .and_then(|bound| *bound)
+    }
+
+    /// Return a weak request-lifetime sentinel for a detached TPM heartbeat.
+    pub fn tpm_reservation_lifetime(&self) -> Weak<()> {
+        Arc::downgrade(&self.tpm_reservation_lifetime)
+    }
+
+    /// Return an owned future completed by successful terminal TPM settlement.
+    pub fn tpm_reservation_heartbeat_stopped(
+        &self,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'static>> {
+        let stop = self.tpm_reservation_heartbeat_stop.clone();
+        Box::pin(async move { stop.cancelled().await })
+    }
+
+    /// Mark terminal TPM settlement and wake the lease heartbeat immediately.
+    pub fn stop_tpm_reservation_heartbeat(&self) {
+        self.tpm_reservation_heartbeat_stop.cancel();
     }
 
     /// 设置 Provider（路由确定后调用）
@@ -79,10 +424,277 @@ impl RequestContext {
         self.usage.add_output(tokens);
     }
 
+    /// 设置输出 token（用于覆盖估算值）
+    ///
+    /// 当 Provider 返回精确的 usage 信息时，使用此方法直接设置输出 token 数
+    /// 而非累积，确保与 Provider 的计费完全一致
+    pub fn set_output_tokens(&self, tokens: u32) {
+        self.usage.set_output(tokens);
+    }
+
     /// 设置输入 token（原子更新）
     pub fn set_input_tokens(&self, tokens: u32) {
         self.usage.set_input(tokens);
     }
+
+    /// 设置输入 token 估算值（流开始时的 tiktoken 估算）。
+    ///
+    /// 不把 input 标记为“已由 Provider 精确值覆盖”；收到 `InputUsage` 或
+    /// 最终 `Usage` 事件后由 `set_input_tokens` 覆盖并锁定。
+    pub fn set_input_tokens_estimate(&self, tokens: u32) {
+        self.usage.set_input_estimate(tokens);
+    }
+
+    /// 设置输出 token 估算值（每次上游尝试开始时清零）。
+    ///
+    /// 不把 output 标记为“已由 Provider 精确值覆盖”；fallback 场景中用于
+    /// 清除上一次失败尝试的精确 output 值，避免泄漏到新尝试的估算计费。
+    pub fn set_output_tokens_estimate(&self, tokens: u32) {
+        self.usage.set_output_estimate(tokens);
+    }
+
+    /// 检查 usage 是否已被 Provider 精确值覆盖
+    ///
+    /// 如果返回 true，说明收到过 StreamEvent::Usage 事件，使用的是 Provider 精确值
+    /// 如果返回 false，说明未收到 Usage 事件，使用的是 tiktoken 估算值
+    pub fn is_usage_finalized(&self) -> bool {
+        self.usage.is_input_finalized() && self.usage.is_output_finalized()
+    }
+
+    /// 输入侧是否已被 Provider 精确值锁定。
+    ///
+    /// 与 `is_usage_finalized` 的区别：只检查 input 侧。收到
+    /// `StreamEvent::InputUsage`（Anthropic message_start）后输入即为精确值，
+    /// 即使输出侧仍停留在估算状态（上游在最终 Usage 前断流）。
+    pub fn is_input_finalized(&self) -> bool {
+        self.usage.is_input_finalized()
+    }
+
+    /// 输出侧是否已被 Provider 精确值锁定。
+    ///
+    /// 与 `is_usage_finalized` 的区别：只检查 output 侧。executor 在收到
+    /// `Usage{input_tokens: 0, output_tokens: N}`（输入被跳过保留估算）后，
+    /// 后续 Delta 不得再向已锁定的精确 output 上累加估算，否则会双重计费。
+    pub fn is_output_finalized(&self) -> bool {
+        self.usage.is_output_finalized()
+    }
+
+    /// 记录实际成功完成请求的上游账号。
+    pub fn set_executed_provider_account(&self, provider: impl Into<String>, account_id: Uuid) {
+        let target = ExecutedProviderAccount {
+            provider: provider.into(),
+            account_id,
+        };
+        if let Ok(mut completed_target) = self.executed_provider_account.write() {
+            *completed_target = Some(target.clone());
+        }
+        if let Ok(mut usage_target) = self.usage_provider_account.write() {
+            *usage_target = Some(target);
+        }
+    }
+
+    /// 获取实际完成请求的上游账号。
+    pub fn executed_provider_account(&self) -> Option<ExecutedProviderAccount> {
+        self.executed_provider_account
+            .read()
+            .ok()
+            .and_then(|target| target.clone())
+    }
+
+    /// 记录当前 usage 快照所属的上游账号，不表示该账号已成功完成请求。
+    pub fn set_usage_provider_account(&self, provider: impl Into<String>, account_id: Uuid) {
+        if let Ok(mut target) = self.usage_provider_account.write() {
+            *target = Some(ExecutedProviderAccount {
+                provider: provider.into(),
+                account_id,
+            });
+        }
+    }
+
+    /// 获取当前 usage 快照所属的上游账号。
+    pub fn usage_provider_account(&self) -> Option<ExecutedProviderAccount> {
+        self.usage_provider_account
+            .read()
+            .ok()
+            .and_then(|target| target.clone())
+    }
+
+    /// Retain the exact target whose upstream HTTP response was accepted.
+    pub fn set_accepted_execution_target(&self, target: ExecutionTarget) {
+        if let Ok(mut accepted) = self.accepted_execution_target.write() {
+            *accepted = Some(target);
+        }
+    }
+
+    /// Return the exact accepted target, including its redacted credential.
+    pub fn accepted_execution_target(&self) -> Option<ExecutionTarget> {
+        self.accepted_execution_target
+            .read()
+            .ok()
+            .and_then(|target| target.clone())
+    }
+
+    /// Signal that at least one upstream attempt accepted the HTTP request.
+    pub fn mark_upstream_response_accepted(&self) {
+        self.upstream_response_accepted.cancel();
+    }
+
+    /// Whether an upstream attempt has accepted the HTTP request.
+    pub fn is_upstream_response_accepted(&self) -> bool {
+        self.upstream_response_accepted.is_cancelled()
+    }
+
+    /// Wait until an upstream attempt accepts the HTTP request.
+    pub async fn wait_for_upstream_response_accepted(&self) {
+        self.upstream_response_accepted.cancelled().await;
+    }
+
+    /// Return the target that should be used for billing.
+    ///
+    /// A fallback that produced the retained usage snapshot must be attributed
+    /// to its own provider account even if its stream ended incompletely. If no
+    /// upstream response owned a usage snapshot, retain the primary target so
+    /// pre-response failures still have deterministic attribution.
+    pub fn billing_target(
+        &self,
+        primary_provider: &str,
+        primary_account_id: Uuid,
+    ) -> (String, Uuid) {
+        self.usage_provider_account()
+            .or_else(|| self.executed_provider_account())
+            .map(|target| (target.provider, target.account_id))
+            .unwrap_or_else(|| (primary_provider.to_string(), primary_account_id))
+    }
+
+    /// 标记客户端已断开。
+    ///
+    /// 流式 handler 在 SSE 发送失败时调用：executor 的 receiver 由后台结算
+    /// 任务持有，`tx.is_closed()` 不会因客户端断开而触发，需要该令牌同时
+    /// 取消当前上游调用并阻止 fallback。若 handler 已先记录成功（例如
+    /// Anthropic `message_stop` 后 SDK 主动关闭 body），该关闭属于正常协议
+    /// 收尾，不再取消仍需消费的内部 `Done` 与结算流程。
+    pub fn mark_client_disconnected(&self) {
+        if self.set_client_response_outcome(ClientResponseOutcome::ClientDisconnected)
+            == ClientResponseOutcome::ClientDisconnected
+        {
+            self.client_disconnect.cancel();
+        }
+    }
+
+    /// 客户端是否已断开。
+    pub fn is_client_disconnected(&self) -> bool {
+        self.client_disconnect.is_cancelled()
+    }
+
+    /// 等待客户端断开；已断开时立即返回。
+    pub async fn wait_for_client_disconnect(&self) {
+        self.client_disconnect.cancelled().await;
+    }
+
+    /// Mark a validated response as handed to the client-facing response stream.
+    pub fn mark_client_response_succeeded(&self) {
+        self.set_client_response_outcome(ClientResponseOutcome::Succeeded);
+    }
+
+    /// Mark handler-side response validation or construction as failed after upstream completion.
+    pub fn mark_client_response_failed(&self) {
+        self.set_client_response_outcome(ClientResponseOutcome::ResponseFailed);
+    }
+
+    /// Mark the client-facing response path as timed out after upstream completion.
+    pub fn mark_client_response_timed_out(&self) {
+        self.set_client_response_outcome(ClientResponseOutcome::TimedOut);
+    }
+
+    /// Return the first terminal client response outcome, if the handler has supplied one.
+    pub fn client_response_outcome(&self) -> Option<ClientResponseOutcome> {
+        *self.client_response_outcome.borrow()
+    }
+
+    /// Preserve the first terminal execution failure for the response handler.
+    /// Retries and fallback attempts do not call this method; only the exhausted
+    /// execution path supplies a failure.
+    pub fn set_execution_failure(&self, failure: RequestExecutionFailure) {
+        if let Ok(mut current) = self.execution_failure.write()
+            && current.is_none()
+        {
+            *current = Some(failure);
+        }
+    }
+
+    /// Return the terminal execution failure, if execution ended unsuccessfully.
+    pub fn execution_failure(&self) -> Option<RequestExecutionFailure> {
+        self.execution_failure
+            .read()
+            .ok()
+            .and_then(|failure| failure.clone())
+    }
+
+    pub fn set_client_upstream_response(&self, response: ClientUpstreamResponse) {
+        if let Ok(mut current) = self.client_upstream_response.write() {
+            *current = Some(response);
+        }
+    }
+
+    pub fn client_upstream_response(&self) -> Option<ClientUpstreamResponse> {
+        self.client_upstream_response
+            .read()
+            .ok()
+            .and_then(|response| response.clone())
+    }
+
+    pub fn clear_client_upstream_response(&self) {
+        if let Ok(mut current) = self.client_upstream_response.write() {
+            *current = None;
+        }
+    }
+
+    pub fn set_client_upstream_response_headers(&self, headers: Vec<(String, String)>) {
+        if let Ok(mut current) = self.client_upstream_response_headers.write() {
+            *current = headers;
+        }
+    }
+
+    pub fn client_upstream_response_headers(&self) -> Vec<(String, String)> {
+        self.client_upstream_response_headers
+            .read()
+            .map(|headers| headers.clone())
+            .unwrap_or_default()
+    }
+
+    pub fn clear_client_upstream_response_headers(&self) {
+        if let Ok(mut current) = self.client_upstream_response_headers.write() {
+            current.clear();
+        }
+    }
+
+    fn set_client_response_outcome(&self, outcome: ClientResponseOutcome) -> ClientResponseOutcome {
+        self.client_response_outcome.send_if_modified(|current| {
+            if current.is_some() {
+                false
+            } else {
+                *current = Some(outcome);
+                true
+            }
+        });
+        self.client_response_outcome().unwrap_or(outcome)
+    }
+}
+
+/// Handler-owned terminal result for the client-facing response.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClientResponseOutcome {
+    Succeeded,
+    ClientDisconnected,
+    ResponseFailed,
+    TimedOut,
+}
+
+/// 已成功完成请求的具体上游账号。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExecutedProviderAccount {
+    pub provider: String,
+    pub account_id: Uuid,
 }
 
 /// 消息角色枚举
@@ -90,6 +702,7 @@ impl RequestContext {
 #[serde(rename_all = "lowercase")]
 pub enum MessageRole {
     System,
+    Developer,
     #[default]
     User,
     Assistant,
@@ -101,6 +714,7 @@ impl MessageRole {
     pub fn as_str(&self) -> &'static str {
         match self {
             MessageRole::System => "system",
+            MessageRole::Developer => "developer",
             MessageRole::User => "user",
             MessageRole::Assistant => "assistant",
             MessageRole::Tool => "tool",
@@ -114,34 +728,120 @@ impl fmt::Display for MessageRole {
     }
 }
 
+/// 消息内容：支持纯文本和 Vision 多模态内容
+///
+/// 反序列化时拒绝空数组 `[]`，避免静默丢失数据。
+#[derive(Debug, Clone, Serialize)]
+#[serde(untagged)]
+pub enum MessageContent {
+    /// 纯文本内容
+    Text(String),
+    /// Vision 内容块列表（图片理解等）
+    Parts(Vec<ContentPart>),
+}
+
+// 使用宏生成自定义 Deserialize 实现，拒绝空数组 []
+crate::impl_untagged_content_deserialize!(
+    MessageContent,
+    ContentPart,
+    "non-empty array of content parts"
+);
+
+impl MessageContent {
+    /// 从纯文本创建
+    pub fn text(content: impl Into<String>) -> Self {
+        Self::Text(content.into())
+    }
+
+    /// 提取纯文本内容（用于日志/计费等场景）
+    pub fn extract_text(&self) -> String {
+        match self {
+            Self::Text(s) => s.clone(),
+            Self::Parts(parts) => parts
+                .iter()
+                .filter_map(|p| match p {
+                    ContentPart::Text { text } => Some(text.as_str()),
+                    ContentPart::ImageUrl { .. } => None,
+                })
+                .collect::<Vec<_>>()
+                .join(" "),
+        }
+    }
+
+    /// 是否为纯文本
+    pub fn is_text(&self) -> bool {
+        matches!(self, Self::Text(_))
+    }
+}
+
+impl From<String> for MessageContent {
+    fn from(s: String) -> Self {
+        Self::Text(s)
+    }
+}
+
+impl From<&str> for MessageContent {
+    fn from(s: &str) -> Self {
+        Self::Text(s.to_string())
+    }
+}
+
+impl std::fmt::Display for MessageContent {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.extract_text())
+    }
+}
+
+/// Vision 内容块
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum ContentPart {
+    /// 文本块
+    #[serde(rename = "text")]
+    Text { text: String },
+    /// 图片 URL 块
+    #[serde(rename = "image_url")]
+    ImageUrl { image_url: ImageUrl },
+}
+
+/// 图片 URL 描述
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImageUrl {
+    /// 图片 URL（支持 http/https URL 或 base64 data URI）
+    pub url: String,
+    /// 细节级别：low / high / auto（可选）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+}
+
 /// 消息结构
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Message {
     pub role: MessageRole,
-    pub content: String,
+    pub content: MessageContent,
 }
 
 impl Message {
-    pub fn new(role: MessageRole, content: impl Into<String>) -> Self {
+    pub fn new(role: MessageRole, content: impl Into<MessageContent>) -> Self {
         Self {
             role,
             content: content.into(),
         }
     }
 
-    pub fn system(content: impl Into<String>) -> Self {
+    pub fn system(content: impl Into<MessageContent>) -> Self {
         Self::new(MessageRole::System, content)
     }
 
-    pub fn user(content: impl Into<String>) -> Self {
+    pub fn user(content: impl Into<MessageContent>) -> Self {
         Self::new(MessageRole::User, content)
     }
 
-    pub fn assistant(content: impl Into<String>) -> Self {
+    pub fn assistant(content: impl Into<MessageContent>) -> Self {
         Self::new(MessageRole::Assistant, content)
     }
 
-    pub fn tool(content: impl Into<String>) -> Self {
+    pub fn tool(content: impl Into<MessageContent>) -> Self {
         Self::new(MessageRole::Tool, content)
     }
 }
@@ -183,10 +883,12 @@ impl ChatCompletionRequest {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
 
     #[test]
     fn test_message_role_as_str() {
         assert_eq!(MessageRole::System.as_str(), "system");
+        assert_eq!(MessageRole::Developer.as_str(), "developer");
         assert_eq!(MessageRole::User.as_str(), "user");
         assert_eq!(MessageRole::Assistant.as_str(), "assistant");
         assert_eq!(MessageRole::Tool.as_str(), "tool");
@@ -197,6 +899,7 @@ mod tests {
         // 测试所有变体的字符串表示
         let roles = vec![
             (MessageRole::System, "system"),
+            (MessageRole::Developer, "developer"),
             (MessageRole::User, "user"),
             (MessageRole::Assistant, "assistant"),
             (MessageRole::Tool, "tool"),
@@ -243,7 +946,7 @@ mod tests {
     fn test_message_creation() {
         let msg = Message::new(MessageRole::User, "Hello");
         assert_eq!(msg.role, MessageRole::User);
-        assert_eq!(msg.content, "Hello");
+        assert_eq!(msg.content.extract_text(), "Hello");
     }
 
     #[test]
@@ -270,16 +973,35 @@ mod tests {
     }
 
     #[test]
+    fn test_message_vision_deserialize() {
+        let json = r#"{"role":"user","content":[{"type":"text","text":"What's in this image?"},{"type":"image_url","image_url":{"url":"https://example.com/image.png","detail":"high"}}]}"#;
+        let msg: Message = serde_json::from_str(json).unwrap();
+        assert_eq!(msg.role, MessageRole::User);
+        assert!(matches!(msg.content, MessageContent::Parts(_)));
+        assert_eq!(msg.content.extract_text(), "What's in this image?");
+    }
+
+    #[test]
+    fn test_message_content_text_serde_roundtrip() {
+        let msg = Message::user("Hello");
+        let json = serde_json::to_string(&msg).unwrap();
+        let deserialized: Message = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.content.extract_text(), "Hello");
+    }
+
+    #[test]
     fn test_message_deserialize() {
         let json = r#"{"role":"assistant","content":"Hello!"}"#;
         let msg: Message = serde_json::from_str(json).unwrap();
         assert_eq!(msg.role, MessageRole::Assistant);
-        assert_eq!(msg.content, "Hello!");
+        assert_eq!(msg.content.extract_text(), "Hello!");
     }
 
     #[test]
     fn test_request_context_new() {
+        let request_id = Uuid::new_v4();
         let ctx = RequestContext::new(
+            request_id,
             Uuid::new_v4(),
             Uuid::new_v4(),
             Uuid::new_v4(),
@@ -288,6 +1010,7 @@ mod tests {
             false,
             PricingSnapshot::default(),
         );
+        assert_eq!(ctx.request_id, request_id);
         assert_eq!(ctx.model, "gpt-4");
         assert!(!ctx.stream);
     }
@@ -295,6 +1018,7 @@ mod tests {
     #[test]
     fn test_request_context_usage_shared() {
         let ctx = RequestContext::new(
+            Uuid::new_v4(),
             Uuid::new_v4(),
             Uuid::new_v4(),
             Uuid::new_v4(),
@@ -323,6 +1047,292 @@ mod tests {
     }
 
     #[test]
+    fn request_context_clone_shares_native_anthropic_body() {
+        let mut ctx = RequestContext::new(
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            "claude-test",
+            Vec::new(),
+            false,
+            PricingSnapshot::default(),
+        );
+        ctx.native_anthropic_request = Some(Arc::new(serde_json::json!({
+            "messages": [{"role": "user", "content": "large payload"}]
+        })));
+
+        let cloned = ctx.clone();
+        assert!(Arc::ptr_eq(
+            ctx.native_anthropic_request.as_ref().unwrap(),
+            cloned.native_anthropic_request.as_ref().unwrap(),
+        ));
+    }
+
+    #[test]
+    fn upstream_acceptance_signal_is_shared_with_payloadless_clones() {
+        let ctx = RequestContext::new(
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            "gpt-test",
+            Vec::new(),
+            true,
+            PricingSnapshot::default(),
+        );
+        let settlement_ctx = ctx.clone_without_request_payloads();
+        ctx.mark_upstream_response_accepted();
+
+        assert!(settlement_ctx.is_upstream_response_accepted());
+        assert!(ctx.is_upstream_response_accepted());
+    }
+
+    #[test]
+    fn balance_reservation_owner_is_shared_with_settlement_clones() {
+        let ctx = RequestContext::new(
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            "gpt-test",
+            Vec::new(),
+            false,
+            PricingSnapshot::default(),
+        );
+        let settlement_ctx = ctx.clone_without_request_payloads();
+        let owner_token = Uuid::new_v4();
+
+        assert_eq!(settlement_ctx.balance_reservation_owner_token(), None);
+        ctx.set_balance_reservation_owner_token(owner_token);
+        assert_eq!(
+            settlement_ctx.balance_reservation_owner_token(),
+            Some(owner_token)
+        );
+    }
+
+    #[test]
+    fn tpm_reservation_state_is_shared_with_payloadless_settlement_clones() {
+        let ctx = RequestContext::new(
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            "gpt-test",
+            Vec::new(),
+            false,
+            PricingSnapshot::default(),
+        );
+        let lifetime = ctx.tpm_reservation_lifetime();
+        let settlement_ctx = ctx.clone_without_request_payloads();
+        ctx.set_tpm_reservation_tokens(321);
+
+        assert_eq!(settlement_ctx.tpm_reservation_tokens(), Some(321));
+        ctx.stop_tpm_reservation_heartbeat();
+        assert!(
+            settlement_ctx.tpm_reservation_heartbeat_stop.is_cancelled(),
+            "terminal settlement signal must be shared with detached clones"
+        );
+        drop(ctx);
+        assert!(
+            lifetime.upgrade().is_some(),
+            "detached settlement must retain the heartbeat lifetime"
+        );
+        drop(settlement_ctx);
+        assert!(
+            lifetime.upgrade().is_none(),
+            "the heartbeat must not own the request lifetime itself"
+        );
+    }
+
+    #[test]
+    fn billing_target_prefers_the_provider_account_that_completed_a_fallback() {
+        let primary_account_id = Uuid::new_v4();
+        let fallback_account_id = Uuid::new_v4();
+        let ctx = RequestContext::new(
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            "gpt-test",
+            Vec::new(),
+            false,
+            PricingSnapshot::default(),
+        );
+
+        ctx.set_executed_provider_account("anthropic", fallback_account_id);
+
+        assert_eq!(
+            ctx.billing_target("openai", primary_account_id),
+            ("anthropic".to_string(), fallback_account_id)
+        );
+    }
+
+    #[test]
+    fn billing_target_uses_primary_when_no_target_completed() {
+        let primary_account_id = Uuid::new_v4();
+        let ctx = RequestContext::new(
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            "gpt-test",
+            Vec::new(),
+            false,
+            PricingSnapshot::default(),
+        );
+
+        assert_eq!(
+            ctx.billing_target("openai", primary_account_id),
+            ("openai".to_string(), primary_account_id)
+        );
+    }
+
+    #[test]
+    fn billing_target_uses_the_account_that_owns_partial_fallback_usage() {
+        let primary_account_id = Uuid::new_v4();
+        let fallback_account_id = Uuid::new_v4();
+        let ctx = RequestContext::new(
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            "gpt-test",
+            Vec::new(),
+            true,
+            PricingSnapshot::default(),
+        );
+
+        ctx.set_usage_provider_account("anthropic", fallback_account_id);
+
+        assert_eq!(ctx.executed_provider_account(), None);
+        assert_eq!(
+            ctx.billing_target("openai", primary_account_id),
+            ("anthropic".to_string(), fallback_account_id)
+        );
+    }
+
+    #[test]
+    fn client_response_outcome_is_shared_and_first_terminal_result_wins() {
+        let ctx = RequestContext::new(
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            "gpt-test",
+            Vec::new(),
+            true,
+            PricingSnapshot::default(),
+        );
+        let cloned = ctx.clone();
+
+        cloned.mark_client_disconnected();
+        ctx.mark_client_response_succeeded();
+
+        assert_eq!(
+            ctx.client_response_outcome(),
+            Some(ClientResponseOutcome::ClientDisconnected)
+        );
+        assert!(ctx.is_client_disconnected());
+
+        let completed = RequestContext::new(
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            "claude-test",
+            Vec::new(),
+            true,
+            PricingSnapshot::default(),
+        );
+        completed.mark_client_response_succeeded();
+        completed.mark_client_disconnected();
+        assert_eq!(
+            completed.client_response_outcome(),
+            Some(ClientResponseOutcome::Succeeded)
+        );
+        assert!(
+            !completed.is_client_disconnected(),
+            "a normal close after protocol completion must not cancel internal settlement"
+        );
+    }
+
+    #[test]
+    fn execution_failure_is_shared_and_first_value_wins() {
+        let ctx = RequestContext::new(
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            "gpt-test",
+            Vec::new(),
+            false,
+            PricingSnapshot::default(),
+        );
+        let cloned = ctx.clone();
+        cloned.set_execution_failure(RequestExecutionFailure {
+            status: crate::RequestStatus::Failed,
+            error: crate::TraceErrorInfo {
+                origin: crate::ErrorOrigin::Upstream,
+                category: crate::TraceErrorCategory::Upstream5xx,
+                code: "first_failure".to_string(),
+                summary: None,
+                retryable: Some(true),
+            },
+            billing_status: crate::BillingStatus::Pending,
+        });
+        ctx.set_execution_failure(RequestExecutionFailure {
+            status: crate::RequestStatus::TimedOut,
+            error: crate::TraceErrorInfo {
+                origin: crate::ErrorOrigin::Gateway,
+                category: crate::TraceErrorCategory::Timeout,
+                code: "later_failure".to_string(),
+                summary: None,
+                retryable: Some(false),
+            },
+            billing_status: crate::BillingStatus::NotApplicable,
+        });
+
+        let failure = ctx.execution_failure().expect("execution failure");
+        assert_eq!(failure.status, crate::RequestStatus::Failed);
+        assert_eq!(failure.error.code, "first_failure");
+    }
+
+    #[test]
+    fn request_context_debug_redacts_native_protocol_payloads() {
+        let mut ctx = RequestContext::new(
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            "claude-test",
+            Vec::new(),
+            false,
+            PricingSnapshot::default(),
+        );
+        ctx.native_anthropic_request = Some(Arc::new(serde_json::json!({
+            "messages": [{"content": [{"type": "image", "source": {"data": "secret-base64"}}] }]
+        })));
+        ctx.native_openai_chat_request = Some(Arc::new(serde_json::json!({
+            "messages": [{"role": "user", "content": "secret-chat-prompt"}]
+        })));
+        ctx.native_openai_responses_request = Some(Arc::new(serde_json::json!({
+            "input": [{"type": "input_image", "image_url": "secret-image"}]
+        })));
+        ctx.native_openai_responses_headers.insert(
+            "idempotency-key".to_string(),
+            "secret-idempotency-value".to_string(),
+        );
+
+        let debug = format!("{ctx:?}");
+        assert!(debug.contains("<redacted>"));
+        assert!(!debug.contains("secret-base64"));
+        assert!(!debug.contains("secret-chat-prompt"));
+        assert!(!debug.contains("secret-image"));
+        assert!(!debug.contains("secret-idempotency-value"));
+    }
+
+    #[test]
     fn test_chat_completion_request_new() {
         let req = ChatCompletionRequest::new("gpt-4", vec![Message::user("Hello")]);
         assert_eq!(req.model, "gpt-4");
@@ -336,5 +1346,13 @@ mod tests {
         let json = serde_json::to_string(&req).unwrap();
         assert!(json.contains("\"model\":\"gpt-4\""));
         assert!(json.contains("\"role\":\"user\""));
+    }
+
+    #[test]
+    fn test_message_content_rejects_empty_array() {
+        // 空数组 [] 应该被拒绝，不能反序列化为 MessageContent::Text("")
+        let json = r#"{"role":"user","content":[]}"#;
+        let result: Result<Message, _> = serde_json::from_str(json);
+        assert!(result.is_err(), "Empty array [] should be rejected");
     }
 }

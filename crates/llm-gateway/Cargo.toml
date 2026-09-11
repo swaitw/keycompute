@@ -7,7 +7,7 @@ edition = "2024"
 keycompute-types = { workspace = true }
 keycompute-runtime = { workspace = true }
 keycompute-routing = { workspace = true }
-keycompute-provider-trait = { workspace = true }
+llm-protocol-provider = { workspace = true }
 async-trait = "0.1"
 bytes = "1"
 futures = "0.3"
@@ -20,4 +20,4 @@ tracing = "0.1"
 uuid = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
 rust_decimal = "1.35"
-tiktoken-rs = "0.9.1"
+tiktoken-rs = "0.11.0"

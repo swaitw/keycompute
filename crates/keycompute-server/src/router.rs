@@ -7,32 +7,60 @@
 //! - 权限控制通过中间件实现，而非路径前缀
 //! - Admin 和普通用户共用前端，通过权限控制展示不同模块
 
+use crate::handlers::admin_user::{
+    list_user_balance_reservations, release_user_balance_reservation,
+};
+use crate::handlers::{
+    anthropic::ANTHROPIC_MESSAGES_BODY_LIMIT_BYTES, openai::OPENAI_CHAT_BODY_LIMIT_BYTES,
+    responses::OPENAI_RESPONSES_BODY_LIMIT_BYTES,
+};
 use crate::{
     handlers::{
+        admin_approve_token,
+        admin_approve_withdrawal,
+        admin_complete_withdrawal,
+        admin_get_tip_ratio,
         // 支付相关
         admin_list_payment_orders,
+        // 节点网关 token 审批（Admin）
+        admin_list_pending_tokens,
+        admin_list_pending_withdrawals,
+        admin_payment_providers,
+        admin_update_tip_ratio,
+        admin_verify_payment_provider,
         alipay_notify,
         calculate_cost,
+        cancel_response,
         change_password,
         // OpenAI 兼容 API
         chat_completions,
         check_provider_health,
+        compact_response,
         complete_registration_handler,
+        count_response_input_tokens,
         create_account,
         create_api_key,
         create_distribution_rule,
+        // 节点网关 token（用户自服务）
+        create_my_node_gateway_token,
         create_payment_order,
         // 定价管理（Admin）
         create_pricing,
+        create_tip_withdrawal,
         // 调试接口
         debug_routing,
         delete_account,
         delete_api_key,
         delete_distribution_rule,
+        delete_my_node_gateway_token,
+        delete_node,
         delete_pricing,
+        delete_response,
         delete_user,
+        exclude_node,
         // 认证相关
         forgot_password_handler,
+        freeze_user_balance,
         // Distribution 分销
         generate_invite_link,
         get_billing_stats,
@@ -42,12 +70,22 @@ use crate::{
         get_distribution_stats,
         get_execution_stats,
         get_gateway_status,
+        get_monitoring_overview,
+        get_monitoring_request,
+        get_monitoring_summary,
+        get_monitoring_target_health,
         get_my_balance,
         get_my_distribution_earnings,
+        get_my_node_gateway_token,
         get_my_referral_code,
         get_my_referrals,
+        get_my_tips_history,
+        // 节点租赁小费
+        get_my_tips_summary,
         get_my_usage,
         get_my_usage_stats,
+        get_my_withdrawals,
+        get_node_gateway_overview,
         get_payment_order,
         get_provider_health,
         // 公开设置
@@ -65,22 +103,42 @@ use crate::{
         list_distribution_records,
         list_distribution_rules,
         list_models,
+        list_monitoring_requests,
         list_my_api_keys,
+        list_my_node_gateway_tokens,
         list_my_payment_orders,
+        list_node_gateway_nodes,
+        list_node_gateway_tasks,
+        list_payment_methods,
         // 定价管理
         list_pricing,
+        list_response_input_items,
         list_tenants,
         login_handler,
+        make_pricing_default,
+        messages,
+        // 节点网关
+        node_complete,
+        node_heartbeat,
+        node_poll,
+        node_register,
+        probe_monitoring_targets,
+        recover_node,
         refresh_account,
         refresh_token_handler,
         register_handler,
         reset_health,
         reset_password_handler,
+        responses,
+        responses_websocket,
         retrieve_model,
+        retrieve_response,
+        revoke_node_token,
         set_account_cooldown,
-        set_default_pricing,
+        submit_requirement_handler,
         sync_payment_order,
         test_account,
+        unfreeze_user_balance,
         update_account,
         update_distribution_rule,
         update_pricing,
@@ -90,16 +148,20 @@ use crate::{
         update_user,
         update_user_balance,
         verify_reset_token_handler,
+        wechatpay_notify,
     },
     middleware::{
-        admin_auth_middleware, cors_layer, maintenance_mode_middleware,
-        public_auth_rate_limit_middleware, rate_limit_middleware, request_logger,
-        trace_id_middleware,
+        admin_auth_middleware, anthropic_error_response_middleware, cors_layer,
+        generation_http_body_admission_middleware, maintenance_mode_middleware,
+        openai_rate_limit_response_middleware, openai_responses_error_response_middleware,
+        payment_notify_rate_limit_middleware, public_auth_rate_limit_middleware,
+        rate_limit_middleware, request_logger, trace_id_middleware,
     },
     state::AppState,
 };
 use axum::{
     Router,
+    extract::DefaultBodyLimit,
     middleware::from_fn_with_state,
     routing::{delete, get, post, put},
 };
@@ -114,6 +176,8 @@ pub fn create_router(state: AppState) -> Router {
             "/api/v1/auth/register/complete",
             post(complete_registration_handler),
         )
+        // 首页需求收集表单（公开，按 IP/设备限流防滥用）
+        .route("/api/v1/requirements", post(submit_requirement_handler))
         .layer(from_fn_with_state(
             state.clone(),
             public_auth_rate_limit_middleware,
@@ -144,6 +208,46 @@ pub fn create_router(state: AppState) -> Router {
         // Models
         .route("/v1/models", get(list_models))
         .route("/v1/models/{model}", get(retrieve_model))
+        .layer(DefaultBodyLimit::max(OPENAI_CHAT_BODY_LIMIT_BYTES))
+        .layer(from_fn_with_state(
+            state.clone(),
+            generation_http_body_admission_middleware,
+        ))
+        .layer(from_fn_with_state(state.clone(), rate_limit_middleware))
+        .layer(axum::middleware::from_fn(
+            openai_rate_limit_response_middleware,
+        ));
+
+    let responses_routes = Router::new()
+        .route("/v1/responses", post(responses).get(responses_websocket))
+        .route("/v1/responses/compact", post(compact_response))
+        .route(
+            "/v1/responses/input_tokens",
+            post(count_response_input_tokens),
+        )
+        .route(
+            "/v1/responses/{response_id}",
+            get(retrieve_response).delete(delete_response),
+        )
+        .route("/v1/responses/{response_id}/cancel", post(cancel_response))
+        .route(
+            "/v1/responses/{response_id}/input_items",
+            get(list_response_input_items),
+        )
+        .layer(DefaultBodyLimit::max(OPENAI_RESPONSES_BODY_LIMIT_BYTES))
+        .layer(from_fn_with_state(
+            state.clone(),
+            generation_http_body_admission_middleware,
+        ))
+        .layer(from_fn_with_state(state.clone(), rate_limit_middleware));
+
+    let anthropic_routes = Router::new()
+        .route("/v1/messages", post(messages))
+        .layer(DefaultBodyLimit::max(ANTHROPIC_MESSAGES_BODY_LIMIT_BYTES))
+        .layer(from_fn_with_state(
+            state.clone(),
+            generation_http_body_admission_middleware,
+        ))
         .layer(from_fn_with_state(state.clone(), rate_limit_middleware));
 
     // ==================== 4. 用户自服务 API（需要认证 + 限流） ====================
@@ -171,9 +275,27 @@ pub fn create_router(state: AppState) -> Router {
             "/api/v1/me/referral/invite-link",
             post(generate_invite_link),
         )
+        // 节点网关 token 管理
+        .route(
+            "/api/v1/me/node-gateway/token/{id}",
+            delete(delete_my_node_gateway_token),
+        )
+        .route(
+            "/api/v1/me/node-gateway/token",
+            get(get_my_node_gateway_token).post(create_my_node_gateway_token),
+        )
+        .route(
+            "/api/v1/me/node-gateway/tokens",
+            get(list_my_node_gateway_tokens),
+        )
+        // 节点租赁小费
+        .route("/api/v1/me/tips", get(get_my_tips_summary))
+        .route("/api/v1/me/tips/history", get(get_my_tips_history))
+        .route("/api/v1/me/tips/withdraw", post(create_tip_withdrawal))
+        .route("/api/v1/me/tips/withdrawals", get(get_my_withdrawals))
         .layer(from_fn_with_state(state.clone(), rate_limit_middleware));
 
-    // ==================== 4. 管理功能 API（需要 Admin 权限） ====================
+    // ==================== 5. 管理功能 API（需要 Admin 权限） ====================
     // 用户管理（Admin 可以管理所有用户，普通用户只能看自己）
     let admin_user_routes = Router::new()
         .route("/api/v1/users", get(list_all_users))
@@ -182,6 +304,22 @@ pub fn create_router(state: AppState) -> Router {
             get(get_user_by_id).put(update_user).delete(delete_user),
         )
         .route("/api/v1/users/{id}/balance", post(update_user_balance))
+        .route(
+            "/api/v1/users/{id}/balance/freeze",
+            post(freeze_user_balance),
+        )
+        .route(
+            "/api/v1/users/{id}/balance/unfreeze",
+            post(unfreeze_user_balance),
+        )
+        .route(
+            "/api/v1/users/{id}/balance/reservations",
+            get(list_user_balance_reservations),
+        )
+        .route(
+            "/api/v1/users/{id}/balance/reservations/{request_id}/release",
+            post(release_user_balance_reservation),
+        )
         .route("/api/v1/users/{id}/api-keys", get(list_all_api_keys));
 
     // 账号/渠道管理（仅 Admin）
@@ -235,8 +373,88 @@ pub fn create_router(state: AppState) -> Router {
             "/api/v1/pricing/{id}",
             put(update_pricing).delete(delete_pricing),
         )
-        .route("/api/v1/pricing/batch-defaults", post(set_default_pricing))
+        .route(
+            "/api/v1/pricing/{id}/make-default",
+            post(make_pricing_default),
+        )
         .route("/api/v1/pricing/calculate", post(calculate_cost));
+
+    // Node Gateway 管理（仅 Admin）
+    let admin_node_gateway_routes = Router::new()
+        .route(
+            "/api/v1/admin/node-gateway/overview",
+            get(get_node_gateway_overview),
+        )
+        .route(
+            "/api/v1/admin/node-gateway/nodes",
+            get(list_node_gateway_nodes),
+        )
+        .route(
+            "/api/v1/admin/node-gateway/tasks",
+            get(list_node_gateway_tasks),
+        )
+        .route("/api/v1/admin/nodes/{id}/recover", post(recover_node))
+        .route("/api/v1/admin/nodes/{id}/exclude", post(exclude_node))
+        .route(
+            "/api/v1/admin/nodes/{id}/revoke-token",
+            post(revoke_node_token),
+        )
+        .route("/api/v1/admin/nodes/{id}", delete(delete_node))
+        // 节点注册 token 审批
+        .route(
+            "/api/v1/admin/node-gateway/tokens/pending",
+            get(admin_list_pending_tokens),
+        )
+        .route(
+            "/api/v1/admin/node-gateway/tokens/{id}/approve",
+            post(admin_approve_token),
+        );
+
+    // 小费管理（仅 Admin）
+    let admin_tips_routes = Router::new()
+        .route(
+            "/api/v1/admin/tips/withdrawals/pending",
+            get(admin_list_pending_withdrawals),
+        )
+        .route(
+            "/api/v1/admin/tips/withdrawals/{id}/approve",
+            post(admin_approve_withdrawal),
+        )
+        .route(
+            "/api/v1/admin/tips/withdrawals/{id}/complete",
+            post(admin_complete_withdrawal),
+        )
+        .route(
+            "/api/v1/admin/tips/settings/ratio",
+            get(admin_get_tip_ratio).put(admin_update_tip_ratio),
+        );
+
+    // 监控追踪（仅 Admin）
+    let admin_monitoring_routes = Router::new()
+        .route(
+            "/api/v1/admin/monitoring/overview",
+            get(get_monitoring_overview),
+        )
+        .route(
+            "/api/v1/admin/monitoring/requests",
+            get(list_monitoring_requests),
+        )
+        .route(
+            "/api/v1/admin/monitoring/requests/{request_id}",
+            get(get_monitoring_request),
+        )
+        .route(
+            "/api/v1/admin/monitoring/summary",
+            get(get_monitoring_summary),
+        )
+        .route(
+            "/api/v1/admin/monitoring/targets/health",
+            get(get_monitoring_target_health),
+        )
+        .route(
+            "/api/v1/admin/monitoring/targets/probe",
+            post(probe_monitoring_targets),
+        );
 
     // 合并管理路由并添加认证和限流中间件
     // 注意：中间件执行顺序是反向的，所以先添加 rate_limit，再添加 admin_auth
@@ -247,19 +465,22 @@ pub fn create_router(state: AppState) -> Router {
         .merge(admin_settings_routes)
         .merge(admin_distribution_routes)
         .merge(admin_pricing_routes)
+        .merge(admin_node_gateway_routes)
+        .merge(admin_tips_routes)
+        .merge(admin_monitoring_routes)
         // 先添加限流层（后执行）
         .layer(from_fn_with_state(state.clone(), rate_limit_middleware))
         // 再添加 Admin 认证层（先执行），统一保护所有 Admin 路由
         .layer(from_fn_with_state(state.clone(), admin_auth_middleware));
 
-    // ==================== 5. 定价和账单 API ====================
+    // ==================== 6. 定价和账单 API ====================
     let billing_routes = Router::new()
         // 账单记录（用户看自己的，Admin 看所有）
         .route("/api/v1/billing/records", get(list_billing_records))
         .route("/api/v1/billing/stats", get(get_billing_stats))
         .layer(from_fn_with_state(state.clone(), rate_limit_middleware));
 
-    // ==================== 6. 调试接口（仅 Admin 使用） ====================
+    // ==================== 7. 调试接口（仅 Admin 使用） ====================
     let debug_routes = Router::new()
         .route("/api/v1/debug/routing", get(debug_routing))
         .route("/api/v1/debug/providers", get(get_provider_health))
@@ -274,7 +495,7 @@ pub fn create_router(state: AppState) -> Router {
         .layer(from_fn_with_state(state.clone(), rate_limit_middleware))
         .layer(from_fn_with_state(state.clone(), admin_auth_middleware));
 
-    // ==================== 7. 支付 API ====================
+    // ==================== 8. 支付 API ====================
     // 用户支付路由（需要认证 + 限流）
     let payment_routes = Router::new()
         // 创建支付订单（支持跳转支付和扫码支付）
@@ -284,9 +505,14 @@ pub fn create_router(state: AppState) -> Router {
         )
         // 获取订单详情
         .route("/api/v1/payments/orders/{id}", get(get_payment_order))
+        .route("/api/v1/payments/methods", get(list_payment_methods))
         // 同步订单状态
         .route(
             "/api/v1/payments/sync/{out_trade_no}",
+            post(sync_payment_order),
+        )
+        .route(
+            "/api/v1/payments/orders/{id}/sync",
             post(sync_payment_order),
         )
         // 获取我的余额
@@ -294,24 +520,47 @@ pub fn create_router(state: AppState) -> Router {
         .layer(from_fn_with_state(state.clone(), rate_limit_middleware));
 
     // 支付宝异步通知（不需要认证）
-    let payment_notify_routes =
-        Router::new().route("/api/v1/payments/notify/alipay", post(alipay_notify));
+    let payment_notify_routes = Router::new()
+        .route("/api/v1/payments/notify/alipay", post(alipay_notify))
+        .route("/api/v1/payments/notify/wechatpay", post(wechatpay_notify))
+        .layer(from_fn_with_state(
+            state.clone(),
+            payment_notify_rate_limit_middleware,
+        ));
 
     // 管理员支付路由
     let admin_payment_routes = Router::new()
         .route(
+            "/api/v1/admin/payments/providers",
+            get(admin_payment_providers),
+        )
+        .route(
+            "/api/v1/admin/payments/providers/{method}/verify",
+            post(admin_verify_payment_provider),
+        )
+        .route(
             "/api/v1/admin/payments/orders",
             get(admin_list_payment_orders),
         )
-        .layer(from_fn_with_state(state.clone(), rate_limit_middleware));
+        .layer(from_fn_with_state(state.clone(), rate_limit_middleware))
+        .layer(from_fn_with_state(state.clone(), admin_auth_middleware));
 
-    // ==================== 8. 健康检查（公开） ====================
+    // ==================== 9. 健康检查（公开） ====================
     let health_routes = Router::new().route("/health", get(health_check));
+
+    // ==================== 10. 节点网关 API（使用 session token 认证） ====================
+    let node_routes = Router::new()
+        .route("/node/v1/register", post(node_register))
+        .route("/node/v1/heartbeat", post(node_heartbeat))
+        .route("/node/v1/tasks/poll", post(node_poll))
+        .route("/node/v1/tasks/{task_id}/complete", post(node_complete));
 
     // ==================== 合并所有路由 ====================
     Router::new()
         .merge(auth_routes)
         .merge(openai_routes)
+        .merge(responses_routes)
+        .merge(anthropic_routes)
         .merge(user_routes)
         .merge(admin_routes)
         .merge(billing_routes)
@@ -320,14 +569,28 @@ pub fn create_router(state: AppState) -> Router {
         .merge(payment_notify_routes)
         .merge(admin_payment_routes)
         .merge(health_routes)
+        .merge(node_routes)
         .merge(public_settings_routes) // 公开设置路由
-        // 维护模式中间件（最外层，在其他中间件之前）
+        // 维护模式中间件（位于 anthropic 错误转换之内、业务层之前；
+        // 其 503 拒绝会被更外层的 anthropic_error_response_middleware 转换）
         .layer(from_fn_with_state(
             state.clone(),
             maintenance_mode_middleware,
         ))
+        // 仅 `/v1/messages` 的非 2xx 响应会被转换，其他 API 保持既有错误格式。
+        // 放在维护模式之外，以覆盖全局维护拒绝。
+        .layer(axum::middleware::from_fn(
+            anthropic_error_response_middleware,
+        ))
+        // Responses uses the OpenAI error schema on authentication, JSON,
+        // body-limit, routing and maintenance failures as well as handler
+        // errors. Official upstream codes are preserved while untrusted
+        // free-form messages are redacted.
+        .layer(axum::middleware::from_fn(
+            openai_responses_error_response_middleware,
+        ))
         .layer(axum::middleware::from_fn(request_logger))
-        .layer(axum::middleware::from_fn(trace_id_middleware))
+        .layer(from_fn_with_state(state.clone(), trace_id_middleware))
         .layer(TraceLayer::new_for_http())
         .layer(cors_layer())
         .with_state(state)
@@ -336,6 +599,16 @@ pub fn create_router(state: AppState) -> Router {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::{
+        Json,
+        body::{Body, to_bytes},
+        http::{Request, StatusCode},
+        middleware::from_fn,
+        routing::post,
+    };
+    use serde_json::Value;
+    use tower::ServiceExt;
+    use uuid::Uuid;
 
     #[test]
     fn test_create_router() {
@@ -343,5 +616,193 @@ mod tests {
         let router = create_router(state);
         // 确保可以创建路由器
         let _ = router;
+    }
+
+    #[tokio::test]
+    async fn anthropic_body_limit_allows_payloads_larger_than_axum_default() {
+        let app = Router::new()
+            .route(
+                "/v1/messages",
+                post(|_: Json<Value>| async { StatusCode::NO_CONTENT }),
+            )
+            .layer(DefaultBodyLimit::max(ANTHROPIC_MESSAGES_BODY_LIMIT_BYTES));
+        let payload = format!(r#"{{"content":"{}"}}"#, "x".repeat(2 * 1024 * 1024));
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/messages")
+                    .header("content-type", "application/json")
+                    .body(Body::from(payload))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    }
+
+    #[tokio::test]
+    async fn anthropic_body_limit_returns_anthropic_request_too_large_error() {
+        let app = Router::new()
+            .route(
+                "/v1/messages",
+                post(|_: Json<Value>| async { StatusCode::NO_CONTENT }),
+            )
+            .layer(DefaultBodyLimit::max(ANTHROPIC_MESSAGES_BODY_LIMIT_BYTES))
+            .layer(from_fn(anthropic_error_response_middleware));
+        let payload = format!(
+            r#"{{"content":"{}"}}"#,
+            "x".repeat(ANTHROPIC_MESSAGES_BODY_LIMIT_BYTES)
+        );
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/messages")
+                    .header("content-type", "application/json")
+                    .body(Body::from(payload))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+        let body = to_bytes(response.into_body(), 64 * 1024).await.unwrap();
+        let body: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body["type"], "error");
+        assert_eq!(body["error"]["type"], "request_too_large");
+    }
+
+    #[tokio::test]
+    async fn messages_route_wraps_x_api_key_authentication_errors() {
+        let app = create_router(AppState::new());
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/messages")
+                    .header("content-type", "application/json")
+                    .header("anthropic-version", "2023-06-01")
+                    .header("x-api-key", "sk-unconfigured-test-key")
+                    .body(Body::from(
+                        r#"{"model":"claude-test","max_tokens":1,"messages":[{"role":"user","content":"hi"}]}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        let body = to_bytes(response.into_body(), 64 * 1024).await.unwrap();
+        let body: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body["type"], "error");
+        assert_eq!(body["error"]["type"], "authentication_error");
+    }
+
+    #[tokio::test]
+    async fn responses_resource_routes_are_publicly_mounted_behind_api_key_auth() {
+        let cases = [
+            ("POST", "/v1/responses"),
+            ("GET", "/v1/responses"),
+            ("POST", "/v1/responses/compact"),
+            ("POST", "/v1/responses/input_tokens"),
+            ("GET", "/v1/responses/resp_test"),
+            ("DELETE", "/v1/responses/resp_test"),
+            ("POST", "/v1/responses/resp_test/cancel"),
+            ("GET", "/v1/responses/resp_test/input_items?limit=10"),
+        ];
+        for (method, uri) in cases {
+            let response = create_router(AppState::new())
+                .oneshot(
+                    Request::builder()
+                        .method(method)
+                        .uri(uri)
+                        .header("content-type", "application/json")
+                        .body(Body::from(r#"{"model":"gpt-test","input":"hi"}"#))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                response.status(),
+                StatusCode::UNAUTHORIZED,
+                "{method} {uri} must resolve to an authenticated route"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn admin_reservation_release_route_is_mounted_behind_admin_auth() {
+        let user_id = Uuid::new_v4();
+        let request_id = Uuid::new_v4();
+        let expected_version = Uuid::new_v4();
+        let response = create_router(AppState::new())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!(
+                        "/api/v1/users/{user_id}/balance/reservations/{request_id}/release"
+                    ))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "expected_version": expected_version,
+                            "reason": "confirmed upstream failure",
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        let body = to_bytes(response.into_body(), 64 * 1024).await.unwrap();
+        let body: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(
+            body,
+            serde_json::json!({
+                "error": {
+                    "message": "Authentication required",
+                    "type": "auth_required",
+                    "code": "unauthorized",
+                }
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn responses_body_limit_allows_payloads_larger_than_axum_default() {
+        let app = Router::new()
+            .route(
+                "/v1/responses",
+                post(|_: Json<Value>| async { StatusCode::NO_CONTENT }),
+            )
+            .layer(DefaultBodyLimit::max(OPENAI_RESPONSES_BODY_LIMIT_BYTES));
+        let payload = format!(r#"{{"input":"{}"}}"#, "x".repeat(2 * 1024 * 1024));
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/responses")
+                    .header("content-type", "application/json")
+                    .body(Body::from(payload))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    }
+
+    #[test]
+    fn responses_body_limit_covers_the_official_inline_skill_maximum() {
+        const OFFICIAL_INLINE_SKILL_BASE64_MAX: usize = 70_254_592;
+        const {
+            assert!(OPENAI_RESPONSES_BODY_LIMIT_BYTES > OFFICIAL_INLINE_SKILL_BASE64_MAX);
+        }
     }
 }

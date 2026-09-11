@@ -17,9 +17,10 @@ OPENAI_INITIAL_BACKOFF_SECONDS = max(
     float(os.getenv("OPENAI_INITIAL_BACKOFF_SECONDS", "5")),
     1.0,
 )
-OPENAI_MAX_OUTPUT_TOKENS = int(os.getenv("OPENAI_MAX_OUTPUT_TOKENS", "2000"))
-MODEL = os.getenv("OPENAI_MODEL", "gpt-5")
-API_URL = "https://api.openai.com/v1/responses"
+OPENAI_MAX_OUTPUT_TOKENS = int(os.getenv("OPENAI_MAX_OUTPUT_TOKENS", "16000"))
+MODEL = os.getenv("OPENAI_MODEL", "deepseek-v4-flash")
+OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.deepseek.com")
+API_URL = f"{OPENAI_BASE_URL}/chat/completions"
 TRANSIENT_STATUS_CODES = {429, 500, 502, 503, 504}
 CODE_EXTENSIONS = {
     ".c",
@@ -44,6 +45,14 @@ CONFIG_EXTENSIONS = {".json", ".toml", ".yaml", ".yml"}
 CONTENT_EXTENSIONS = {".css", ".html", ".md", ".scss", ".svg"}
 LOW_SIGNAL_FILENAMES = {"Cargo.lock", "package-lock.json", "pnpm-lock.yaml", "yarn.lock"}
 TRUNCATION_MARKER = "\n...[truncated]"
+
+
+class LLMRequestError(RuntimeError):
+    def __init__(self, message: str, *, status_code: int | None = None, error_type: str = "", error_code: str = ""):
+        super().__init__(message)
+        self.status_code = status_code
+        self.error_type = error_type
+        self.error_code = error_code
 
 
 def load_json(path: str):
@@ -208,6 +217,26 @@ def extract_error_message(response: requests.Response) -> str:
     return response.text.strip()
 
 
+def extract_error_details(response: requests.Response) -> tuple[str, str, str]:
+    try:
+        data = response.json()
+    except ValueError:
+        return "", "", response.text.strip()
+
+    error = data.get("error")
+    if not isinstance(error, dict):
+        if isinstance(error, str):
+            return "", "", error
+        return "", "", response.text.strip()
+
+    error_type = str(error.get("type") or "").strip()
+    error_code = str(error.get("code") or "").strip()
+    error_message = str(error.get("message") or "").strip()
+    if not error_message:
+        error_message = json.dumps(error, ensure_ascii=False)
+    return error_type, error_code, error_message
+
+
 def retry_delay_seconds(response: requests.Response, attempt: int) -> float:
     retry_after = response.headers.get("retry-after")
     if retry_after:
@@ -217,6 +246,15 @@ def retry_delay_seconds(response: requests.Response, attempt: int) -> float:
             pass
 
     return OPENAI_INITIAL_BACKOFF_SECONDS * (2**attempt)
+
+
+def is_insufficient_quota(status_code: int, error_type: str, error_code: str, error_message: str) -> bool:
+    lowered = f"{error_type} {error_code} {error_message}".lower()
+    return status_code == 429 and (
+        "insufficient_quota" in lowered
+        or "billing_hard_limit_reached" in lowered
+        or "exceeded your current quota" in lowered
+    )
 
 
 def call_openai(instructions: str, user_input: str) -> str:
@@ -234,9 +272,12 @@ def call_openai(instructions: str, user_input: str) -> str:
             },
             json={
                 "model": MODEL,
-                "instructions": instructions,
-                "input": user_input,
-                "max_output_tokens": OPENAI_MAX_OUTPUT_TOKENS,
+                "messages": [
+                    {"role": "system", "content": instructions},
+                    {"role": "user", "content": user_input}
+                ],
+                "max_tokens": OPENAI_MAX_OUTPUT_TOKENS,
+                "stream": False,
             },
             timeout=180,
         )
@@ -245,19 +286,38 @@ def call_openai(instructions: str, user_input: str) -> str:
             data = response.json()
             break
 
-        error_message = extract_error_message(response)
+        error_type, error_code, error_message = extract_error_details(response)
         should_retry = (
             response.status_code in TRANSIENT_STATUS_CODES
+            and not is_insufficient_quota(response.status_code, error_type, error_code, error_message)
             and attempt < OPENAI_RETRY_ATTEMPTS - 1
         )
         if should_retry:
             time.sleep(retry_delay_seconds(response, attempt))
             continue
 
+        if is_insufficient_quota(response.status_code, error_type, error_code, error_message):
+            raise LLMRequestError(
+                "LLM API quota exceeded (429). "
+                f"Model: {MODEL}. "
+                f"Type: {error_type or 'unknown'}. "
+                f"Code: {error_code or 'unknown'}. "
+                f"Details: {error_message or 'Too Many Requests'}",
+                status_code=response.status_code,
+                error_type=error_type,
+                error_code=error_code,
+            )
+
         if response.status_code == 429:
-            raise RuntimeError(
-                "OpenAI API rate limit or quota exceeded (429). "
-                f"Model: {MODEL}. Details: {error_message or 'Too Many Requests'}"
+            raise LLMRequestError(
+                "LLM API rate limit exceeded (429). "
+                f"Model: {MODEL}. "
+                f"Type: {error_type or 'unknown'}. "
+                f"Code: {error_code or 'unknown'}. "
+                f"Details: {error_message or 'Too Many Requests'}",
+                status_code=response.status_code,
+                error_type=error_type,
+                error_code=error_code,
             )
 
         response.raise_for_status()
@@ -268,6 +328,15 @@ def call_openai(instructions: str, user_input: str) -> str:
     if data.get("error"):
         raise RuntimeError(f"OpenAI API error: {data['error']}")
 
+    # Chat Completions API response format
+    choices = data.get("choices", [])
+    if choices and len(choices) > 0:
+        message = choices[0].get("message", {})
+        content = message.get("content", "")
+        if content:
+            return content.strip()
+
+    # Fallback: try output_text for compatibility
     output_text = data.get("output_text")
     if output_text:
         return output_text.strip()
@@ -317,8 +386,7 @@ Note: This review is generated from the PR diff and may not reflect code outside
 def build_failure_review(error: Exception) -> str:
     error_text = f"{type(error).__name__}: {str(error)}"
     suggestions = [
-        "- Check repository secrets.",
-        "- Check OpenAI API access and model availability.",
+        "- Check the LLM API access and model availability.",
         "- Check the workflow logs for the request/response path.",
     ]
     tests = [
@@ -328,11 +396,22 @@ def build_failure_review(error: Exception) -> str:
     ]
 
     lowered = error_text.lower()
-    if "429" in error_text or "rate limit" in lowered or "quota" in lowered:
+    if "quota exceeded" in lowered or "insufficient_quota" in lowered or "billing_hard_limit_reached" in lowered:
         suggestions = [
-            "- The request hit an OpenAI rate or quota limit; this is usually not caused by a missing repository secret.",
+            "- The request reached the LLM project quota limit; this is usually not caused by a missing repository secret.",
+            "- Add quota/billing to the project behind `OPENAI_API_KEY` (the LLM API key), or switch to a project with available spend.",
+            "- Keep the configured model unchanged and retry after the project quota has been restored.",
+        ]
+        tests = [
+            "- Call the same model from the same API project outside GitHub Actions to confirm the quota error is reproducible.",
+            "- Verify the API project attached to `OPENAI_API_KEY` has active billing and remaining quota.",
+            "- Re-run the workflow after quota is restored.",
+        ]
+    elif "429" in error_text or "rate limit" in lowered:
+        suggestions = [
+            "- The request hit an LLM API rate limit; the key may still be valid.",
             "- Retry after a short wait, or reduce the diff context and retry with the same comment trigger.",
-            "- Verify the project behind `OPENAI_API_KEY` has active billing/quota for the selected model.",
+            "- If this happens often, reduce prompt size or lower concurrent workflow runs for this repository.",
         ]
         tests = [
             "- Re-run the workflow after a short delay.",

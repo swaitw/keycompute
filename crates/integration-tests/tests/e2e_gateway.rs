@@ -4,9 +4,9 @@
 
 use integration_tests::common::VerificationChain;
 use integration_tests::mocks::provider::MockProviderFactory;
-use keycompute_provider_trait::ProviderAdapter;
 use llm_gateway::retry::RetryState;
 use llm_gateway::{FailoverManager, GatewayBuilder, GatewayConfig, RetryPolicy};
+use llm_protocol_provider::ProviderAdapter;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -133,27 +133,27 @@ fn test_gateway_failover() {
 
     // 2. 创建测试 targets
     let targets = vec![
-        ExecutionTarget {
-            provider: "openai".to_string(),
-            account_id: Uuid::new_v4(),
-            endpoint: "https://api.openai.com".to_string(),
-            upstream_api_key: "key1".into(),
-        },
-        ExecutionTarget {
-            provider: "claude".to_string(),
-            account_id: Uuid::new_v4(),
-            endpoint: "https://api.anthropic.com".to_string(),
-            upstream_api_key: "key2".into(),
-        },
+        ExecutionTarget::new_provider("openai", Uuid::new_v4(), "https://api.openai.com", "key1"),
+        ExecutionTarget::new_provider(
+            "claude",
+            Uuid::new_v4(),
+            "https://api.anthropic.com",
+            "key2",
+        ),
     ];
 
     // 3. 选择下一个 target
     let next = manager.select_next(&targets, 0);
+    let next_provider = match &next {
+        Some(ExecutionTarget::ProviderAccount { provider, .. }) => Some(provider.clone()),
+        Some(ExecutionTarget::Node { model }) => Some(format!("node:{}", model)),
+        None => None,
+    };
     chain.add_step(
         "llm-gateway",
         "FailoverManager::select_next",
-        format!("Next provider: {:?}", next.map(|t| t.provider.clone())),
-        next.map(|t| t.provider.clone()) == Some("claude".to_string()),
+        format!("Next provider: {:?}", next_provider),
+        next_provider == Some("claude".to_string()),
     );
 
     // 4. 从最后一个选择
@@ -161,7 +161,7 @@ fn test_gateway_failover() {
     chain.add_step(
         "llm-gateway",
         "FailoverManager::select_next_last",
-        format!("Next after last: {:?}", none.map(|t| t.provider.clone())),
+        format!("Next after last: {:?}", none),
         none.is_none(),
     );
 
@@ -187,14 +187,15 @@ async fn test_gateway_provider_stream() {
 
     // 2. 构建请求
     let request =
-        keycompute_provider_trait::UpstreamRequest::new("http://mock-openai", "mock-key", "gpt-4o")
+        llm_protocol_provider::UpstreamRequest::new("http://mock-openai", "mock-key", "gpt-4o")
+            .with_stream(true)
             .with_message("user", "Hello");
 
     // 3. 执行流请求
-    let transport = keycompute_provider_trait::DefaultHttpTransport::new();
+    let transport = llm_protocol_provider::DefaultHttpTransport::new();
     let stream = provider.stream_chat(&transport, request).await;
     chain.add_step(
-        "keycompute-provider-trait",
+        "llm-protocol-provider",
         "ProviderAdapter::stream_chat",
         "Stream request initiated",
         stream.is_ok(),
@@ -210,8 +211,8 @@ async fn test_gateway_provider_stream() {
             event_count += 1;
             if let Ok(event) = event {
                 match event {
-                    keycompute_provider_trait::StreamEvent::Usage { .. } => has_usage = true,
-                    keycompute_provider_trait::StreamEvent::Done => has_done = true,
+                    llm_protocol_provider::StreamEvent::Usage { .. } => has_usage = true,
+                    llm_protocol_provider::StreamEvent::Done => has_done = true,
                     _ => {}
                 }
             }
@@ -260,11 +261,11 @@ async fn test_gateway_fallback_chain() {
     );
 
     // 2. 尝试失败 Provider
-    let request =
-        keycompute_provider_trait::UpstreamRequest::new("http://mock", "mock-key", "gpt-4o");
+    let request = llm_protocol_provider::UpstreamRequest::new("http://mock", "mock-key", "gpt-4o")
+        .with_stream(true);
 
     // 使用默认 HTTP 传输层
-    let transport = keycompute_provider_trait::DefaultHttpTransport::new();
+    let transport = llm_protocol_provider::DefaultHttpTransport::new();
 
     let primary_result = failing_provider
         .stream_chat(&transport, request.clone())

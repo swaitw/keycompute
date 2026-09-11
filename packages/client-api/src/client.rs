@@ -31,12 +31,15 @@ impl ApiClient {
         let client = {
             #[cfg(not(target_arch = "wasm32"))]
             {
-                Client::builder()
-                    .timeout(Duration::from_secs(config.timeout_secs))
-                    .build()
-                    .map_err(|e| {
-                        ClientError::Config(format!("Failed to create HTTP client: {}", e))
-                    })?
+                let mut builder =
+                    Client::builder().timeout(Duration::from_secs(config.timeout_secs));
+                // 绕过系统代理，避免连接本地服务（如测试 Mock 服务器）时被代理拦截
+                if config.no_proxy {
+                    builder = builder.no_proxy();
+                }
+                builder.build().map_err(|e| {
+                    ClientError::Config(format!("Failed to create HTTP client: {}", e))
+                })?
             }
             #[cfg(target_arch = "wasm32")]
             {
@@ -117,6 +120,25 @@ impl ApiClient {
     ) -> Result<T> {
         let builder = self.request_with_auth(Method::POST, path, token).await?;
         self.send_and_parse(builder.json(body)).await
+    }
+
+    /// Send an idempotent POST. The header is attached before the retryable
+    /// request builder is cloned, so every transport retry uses the exact same
+    /// key.
+    pub async fn post_json_with_idempotency_key<T: DeserializeOwned, B: Serialize>(
+        &self,
+        path: &str,
+        body: &B,
+        idempotency_key: &str,
+        token: Option<&str>,
+    ) -> Result<T> {
+        let builder = self.request_with_auth(Method::POST, path, token).await?;
+        self.send_and_parse(
+            builder
+                .header("Idempotency-Key", idempotency_key)
+                .json(body),
+        )
+        .await
     }
 
     /// 发送 PUT 请求并解析响应

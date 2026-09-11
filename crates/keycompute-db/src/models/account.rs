@@ -1,11 +1,12 @@
+use super::query::escape_like_pattern;
 use crate::DbError;
 use chrono::{DateTime, Utc};
+use sea_orm::{ConnectionTrait, DbBackend, FromQueryResult, Statement};
 use serde::{Deserialize, Serialize};
-use sqlx::FromRow;
 use uuid::Uuid;
 
 /// 上游 Provider 账号模型
-#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+#[derive(Debug, Clone, FromQueryResult, Serialize, Deserialize)]
 pub struct Account {
     pub id: Uuid,
     pub tenant_id: Uuid,
@@ -19,8 +20,20 @@ pub struct Account {
     pub priority: i32,
     pub enabled: bool,
     pub models_supported: Vec<String>,
+    pub api_capabilities: Vec<String>,
+    /// 可见性：'tenant' = 仅本租户可见（默认），'global' = 所有租户可见
+    pub visibility: String,
+    pub last_probe_at: Option<DateTime<Utc>>,
+    pub last_probe_latency_ms: Option<i64>,
+    pub last_probe_status: Option<String>,
+    pub last_probe_error_code: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, FromQueryResult)]
+struct AccountCount {
+    total: i64,
 }
 
 /// 创建账号请求
@@ -36,11 +49,14 @@ pub struct CreateAccountRequest {
     pub tpm_limit: Option<i32>,
     pub priority: Option<i32>,
     pub models_supported: Vec<String>,
+    pub api_capabilities: Vec<String>,
+    pub visibility: Option<String>,
 }
 
 /// 更新账号请求
 #[derive(Debug, Clone, Deserialize)]
 pub struct UpdateAccountRequest {
+    pub tenant_id: Option<Uuid>,
     pub name: Option<String>,
     pub endpoint: Option<String>,
     pub upstream_api_key_encrypted: Option<String>,
@@ -50,111 +66,309 @@ pub struct UpdateAccountRequest {
     pub priority: Option<i32>,
     pub enabled: Option<bool>,
     pub models_supported: Option<Vec<String>>,
+    pub api_capabilities: Option<Vec<String>>,
+    pub visibility: Option<String>,
 }
 
 impl Account {
     /// 创建新账号
     pub async fn create(
-        pool: &sqlx::PgPool,
+        db: &impl ConnectionTrait,
         req: &CreateAccountRequest,
     ) -> Result<Account, DbError> {
-        let account = sqlx::query_as::<_, Account>(
+        let stmt = Statement::from_sql_and_values(
+            DbBackend::Postgres,
             r#"
             INSERT INTO accounts (
                 tenant_id, provider, name, endpoint,
                 upstream_api_key_encrypted, upstream_api_key_preview,
-                rpm_limit, tpm_limit, priority, models_supported
+                rpm_limit, tpm_limit, priority, models_supported, api_capabilities, visibility
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
             RETURNING *
             "#,
-        )
-        .bind(req.tenant_id)
-        .bind(&req.provider)
-        .bind(&req.name)
-        .bind(&req.endpoint)
-        .bind(&req.upstream_api_key_encrypted)
-        .bind(&req.upstream_api_key_preview)
-        .bind(req.rpm_limit.unwrap_or(60))
-        .bind(req.tpm_limit.unwrap_or(100000))
-        .bind(req.priority.unwrap_or(0))
-        .bind(&req.models_supported)
-        .fetch_one(pool)
-        .await?;
+            [
+                req.tenant_id.into(),
+                req.provider.as_str().into(),
+                req.name.as_str().into(),
+                req.endpoint.as_str().into(),
+                req.upstream_api_key_encrypted.as_str().into(),
+                req.upstream_api_key_preview.as_str().into(),
+                req.rpm_limit.unwrap_or(60).into(),
+                req.tpm_limit.unwrap_or(100000).into(),
+                req.priority.unwrap_or(0).into(),
+                req.models_supported.clone().into(),
+                req.api_capabilities.clone().into(),
+                req.visibility.as_deref().unwrap_or("tenant").into(),
+            ],
+        );
+        let account = Account::find_by_statement(stmt)
+            .one(db)
+            .await?
+            .ok_or_else(|| DbError::Other("create failed to return row".to_string()))?;
 
         Ok(account)
     }
 
     /// 根据 ID 查找账号
-    pub async fn find_by_id(pool: &sqlx::PgPool, id: Uuid) -> Result<Option<Account>, DbError> {
-        let account = sqlx::query_as::<_, Account>("SELECT * FROM accounts WHERE id = $1")
-            .bind(id)
-            .fetch_optional(pool)
-            .await?;
+    pub async fn find_by_id(
+        db: &impl ConnectionTrait,
+        id: Uuid,
+    ) -> Result<Option<Account>, DbError> {
+        let stmt = Statement::from_sql_and_values(
+            DbBackend::Postgres,
+            "SELECT * FROM accounts WHERE id = $1",
+            [id.into()],
+        );
+        let account = Account::find_by_statement(stmt).one(db).await?;
 
         Ok(account)
     }
 
-    /// 查找租户的所有账号
+    /// Load and lock an account on the writer for a destructive operation.
+    /// The lock prevents a new Responses affinity from acquiring its foreign-
+    /// key key-share lock while account deletion drains existing routes.
+    pub async fn find_by_id_for_update(
+        db: &impl ConnectionTrait,
+        id: Uuid,
+    ) -> Result<Option<Account>, DbError> {
+        let stmt = Statement::from_sql_and_values(
+            DbBackend::Postgres,
+            "SELECT * FROM accounts WHERE id = $1 FOR UPDATE",
+            [id.into()],
+        );
+        Ok(Account::find_by_statement(stmt).one(db).await?)
+    }
+
+    /// Load an account from the writer for an authorization- or
+    /// ownership-sensitive operation without taking an exclusive row lock.
+    pub async fn find_by_id_for_key_share(
+        db: &impl ConnectionTrait,
+        id: Uuid,
+    ) -> Result<Option<Account>, DbError> {
+        let stmt = Statement::from_sql_and_values(
+            DbBackend::Postgres,
+            "SELECT * FROM accounts WHERE id = $1 FOR KEY SHARE",
+            [id.into()],
+        );
+        Ok(Account::find_by_statement(stmt).one(db).await?)
+    }
+
+    /// 查找租户的所有账号（仅本租户，管理面使用）
     pub async fn find_by_tenant(
-        pool: &sqlx::PgPool,
+        db: &impl ConnectionTrait,
         tenant_id: Uuid,
     ) -> Result<Vec<Account>, DbError> {
-        let accounts = sqlx::query_as::<_, Account>(
+        let stmt = Statement::from_sql_and_values(
+            DbBackend::Postgres,
             "SELECT * FROM accounts WHERE tenant_id = $1 ORDER BY priority DESC, created_at ASC",
-        )
-        .bind(tenant_id)
-        .fetch_all(pool)
-        .await?;
+            [tenant_id.into()],
+        );
+        let accounts = Account::find_by_statement(stmt).all(db).await?;
 
         Ok(accounts)
     }
 
-    /// 查找租户启用的账号
+    /// Load a bounded set of tenant-private accounts that can be probed to
+    /// discover the owner of an imported protocol resource.
+    ///
+    /// Shared/global accounts are deliberately excluded: probing them with a
+    /// tenant-supplied resource ID could expose or attach another tenant's
+    /// upstream resource. The caller may request one extra row to determine
+    /// whether its probe budget truncated the eligible set.
+    pub async fn find_tenant_discovery_candidates(
+        db: &impl ConnectionTrait,
+        tenant_id: Uuid,
+        provider: &str,
+        api_capability: &str,
+        limit: u64,
+    ) -> Result<Vec<Account>, DbError> {
+        let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+        let stmt = Statement::from_sql_and_values(
+            DbBackend::Postgres,
+            r#"
+            SELECT * FROM accounts
+            WHERE tenant_id = $1
+              AND visibility = 'tenant'
+              AND enabled = TRUE
+              AND LOWER(provider) = LOWER($2)
+              AND api_capabilities @> ARRAY[$3]::TEXT[]
+            ORDER BY priority DESC, created_at ASC
+            LIMIT $4
+            "#,
+            [
+                tenant_id.into(),
+                provider.into(),
+                api_capability.into(),
+                limit.into(),
+            ],
+        );
+        Ok(Account::find_by_statement(stmt).all(db).await?)
+    }
+
+    /// 查找所有账号（不限租户，Admin 管理面使用）
+    pub async fn find_all(db: &impl ConnectionTrait) -> Result<Vec<Account>, DbError> {
+        let stmt = Statement::from_string(
+            DbBackend::Postgres,
+            "SELECT * FROM accounts ORDER BY priority DESC, created_at ASC".to_string(),
+        );
+        let accounts = Account::find_by_statement(stmt).all(db).await?;
+
+        Ok(accounts)
+    }
+
+    /// 分页查找所有租户的账号，供 Admin 管理面使用。
+    pub async fn find_all_filtered(
+        db: &impl ConnectionTrait,
+        provider: Option<&str>,
+        enabled: Option<bool>,
+        search: Option<&str>,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<Account>, DbError> {
+        let search = search
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(escape_like_pattern);
+        let stmt = Statement::from_sql_and_values(
+            DbBackend::Postgres,
+            r#"
+            SELECT * FROM accounts
+            WHERE ($1::text IS NULL OR LOWER(provider) = LOWER($1))
+              AND ($2::boolean IS NULL OR enabled = $2)
+              AND ($3::text IS NULL
+                OR LOWER(name) LIKE '%' || LOWER($3) || '%' ESCAPE '\'
+                OR LOWER(provider) LIKE '%' || LOWER($3) || '%' ESCAPE '\'
+                OR LOWER(id::text) LIKE '%' || LOWER($3) || '%' ESCAPE '\'
+                OR LOWER(tenant_id::text) LIKE '%' || LOWER($3) || '%' ESCAPE '\')
+            ORDER BY priority DESC, created_at ASC, id ASC
+            LIMIT $4 OFFSET $5
+            "#,
+            [
+                provider.into(),
+                enabled.into(),
+                search.as_deref().into(),
+                limit.into(),
+                offset.into(),
+            ],
+        );
+        Ok(Account::find_by_statement(stmt).all(db).await?)
+    }
+
+    /// 统计 Admin 管理面过滤后的账号数量。
+    pub async fn count_all_filtered(
+        db: &impl ConnectionTrait,
+        provider: Option<&str>,
+        enabled: Option<bool>,
+        search: Option<&str>,
+    ) -> Result<i64, DbError> {
+        let search = search
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(escape_like_pattern);
+        let stmt = Statement::from_sql_and_values(
+            DbBackend::Postgres,
+            r#"
+            SELECT COUNT(*)::BIGINT AS total FROM accounts
+            WHERE ($1::text IS NULL OR LOWER(provider) = LOWER($1))
+              AND ($2::boolean IS NULL OR enabled = $2)
+              AND ($3::text IS NULL
+                OR LOWER(name) LIKE '%' || LOWER($3) || '%' ESCAPE '\'
+                OR LOWER(provider) LIKE '%' || LOWER($3) || '%' ESCAPE '\'
+                OR LOWER(id::text) LIKE '%' || LOWER($3) || '%' ESCAPE '\'
+                OR LOWER(tenant_id::text) LIKE '%' || LOWER($3) || '%' ESCAPE '\')
+            "#,
+            [provider.into(), enabled.into(), search.as_deref().into()],
+        );
+        Ok(AccountCount::find_by_statement(stmt)
+            .one(db)
+            .await?
+            .map(|row| row.total)
+            .unwrap_or(0))
+    }
+
+    /// 查找租户启用的账号（含本租户 + 全局可见）
     pub async fn find_enabled_by_tenant(
-        pool: &sqlx::PgPool,
+        db: &impl ConnectionTrait,
         tenant_id: Uuid,
     ) -> Result<Vec<Account>, DbError> {
-        let accounts = sqlx::query_as::<_, Account>(
-            "SELECT * FROM accounts WHERE tenant_id = $1 AND enabled = TRUE ORDER BY priority DESC",
-        )
-        .bind(tenant_id)
-        .fetch_all(pool)
-        .await?;
+        let stmt = Statement::from_sql_and_values(
+            DbBackend::Postgres,
+            "SELECT * FROM accounts WHERE (tenant_id = $1 OR visibility = 'global') AND enabled = TRUE ORDER BY priority DESC",
+            [tenant_id.into()],
+        );
+        let accounts = Account::find_by_statement(stmt).all(db).await?;
 
         Ok(accounts)
     }
 
     /// 查找所有启用的账号（系统级，不限租户）
-    pub async fn find_enabled_all(pool: &sqlx::PgPool) -> Result<Vec<Account>, DbError> {
-        let accounts = sqlx::query_as::<_, Account>(
-            "SELECT * FROM accounts WHERE enabled = TRUE ORDER BY priority DESC",
-        )
-        .fetch_all(pool)
-        .await?;
+    pub async fn find_enabled_all(db: &impl ConnectionTrait) -> Result<Vec<Account>, DbError> {
+        let stmt = Statement::from_string(
+            DbBackend::Postgres,
+            "SELECT * FROM accounts WHERE enabled = TRUE ORDER BY priority DESC".to_string(),
+        );
+        let accounts = Account::find_by_statement(stmt).all(db).await?;
 
         Ok(accounts)
     }
 
-    /// 查找支持指定模型的账号
+    /// Persist a health probe only if the account configuration has not changed
+    /// since the probe started.
+    ///
+    /// Probe telemetry deliberately does not modify `updated_at`: that column is
+    /// the optimistic version for account configuration, while concurrent probes
+    /// of the same version may safely use completion order for the latest health
+    /// snapshot.
+    pub async fn record_probe_snapshot_if_config_current(
+        db: &impl ConnectionTrait,
+        id: Uuid,
+        expected_updated_at: DateTime<Utc>,
+        probed_at: DateTime<Utc>,
+        latency_ms: i64,
+        status: &str,
+        error_code: Option<&str>,
+    ) -> Result<bool, DbError> {
+        let result = db
+            .execute(Statement::from_sql_and_values(
+                DbBackend::Postgres,
+                r#"UPDATE accounts
+                   SET last_probe_at=$1,last_probe_latency_ms=$2,
+                       last_probe_status=$3,last_probe_error_code=$4
+                   WHERE id=$5 AND updated_at=$6"#,
+                [
+                    probed_at.into(),
+                    latency_ms.into(),
+                    status.into(),
+                    error_code.into(),
+                    id.into(),
+                    expected_updated_at.into(),
+                ],
+            ))
+            .await?;
+        Ok(result.rows_affected() == 1)
+    }
+
+    /// 查找支持指定模型的账号（含本租户 + 全局可见）
     pub async fn find_by_model(
-        pool: &sqlx::PgPool,
+        db: &impl ConnectionTrait,
         tenant_id: Uuid,
         model: &str,
+        api_capability: &str,
     ) -> Result<Vec<Account>, DbError> {
-        let accounts = sqlx::query_as::<_, Account>(
+        let stmt = Statement::from_sql_and_values(
+            DbBackend::Postgres,
             r#"
             SELECT * FROM accounts
-            WHERE tenant_id = $1
+            WHERE (tenant_id = $1 OR visibility = 'global')
               AND enabled = TRUE
               AND $2 = ANY(models_supported)
+              AND api_capabilities @> ARRAY[$3]::TEXT[]
             ORDER BY priority DESC
             "#,
-        )
-        .bind(tenant_id)
-        .bind(model)
-        .fetch_all(pool)
-        .await?;
+            [tenant_id.into(), model.into(), api_capability.into()],
+        );
+        let accounts = Account::find_by_statement(stmt).all(db).await?;
 
         Ok(accounts)
     }
@@ -162,10 +376,11 @@ impl Account {
     /// 更新账号
     pub async fn update(
         &self,
-        pool: &sqlx::PgPool,
+        db: &impl ConnectionTrait,
         req: &UpdateAccountRequest,
     ) -> Result<Account, DbError> {
-        let account = sqlx::query_as::<_, Account>(
+        let stmt = Statement::from_sql_and_values(
+            DbBackend::Postgres,
             r#"
             UPDATE accounts
             SET name = COALESCE($1, name),
@@ -177,33 +392,45 @@ impl Account {
                 priority = COALESCE($7, priority),
                 enabled = COALESCE($8, enabled),
                 models_supported = COALESCE($9, models_supported),
+                api_capabilities = COALESCE($10, api_capabilities),
+                visibility = COALESCE($11, visibility),
+                tenant_id = COALESCE($12, tenant_id),
                 updated_at = NOW()
-            WHERE id = $10
+            WHERE id = $13
             RETURNING *
             "#,
-        )
-        .bind(&req.name)
-        .bind(&req.endpoint)
-        .bind(&req.upstream_api_key_encrypted)
-        .bind(&req.upstream_api_key_preview)
-        .bind(req.rpm_limit)
-        .bind(req.tpm_limit)
-        .bind(req.priority)
-        .bind(req.enabled)
-        .bind(&req.models_supported)
-        .bind(self.id)
-        .fetch_one(pool)
-        .await?;
+            [
+                req.name.clone().into(),
+                req.endpoint.clone().into(),
+                req.upstream_api_key_encrypted.clone().into(),
+                req.upstream_api_key_preview.clone().into(),
+                req.rpm_limit.into(),
+                req.tpm_limit.into(),
+                req.priority.into(),
+                req.enabled.into(),
+                req.models_supported.clone().into(),
+                req.api_capabilities.clone().into(),
+                req.visibility.clone().into(),
+                req.tenant_id.into(),
+                self.id.into(),
+            ],
+        );
+        let account = Account::find_by_statement(stmt)
+            .one(db)
+            .await?
+            .ok_or_else(|| DbError::Other("update failed to return row".to_string()))?;
 
         Ok(account)
     }
 
     /// 删除账号
-    pub async fn delete(&self, pool: &sqlx::PgPool) -> Result<(), DbError> {
-        sqlx::query("DELETE FROM accounts WHERE id = $1")
-            .bind(self.id)
-            .execute(pool)
-            .await?;
+    pub async fn delete(&self, db: &impl ConnectionTrait) -> Result<(), DbError> {
+        let stmt = Statement::from_sql_and_values(
+            DbBackend::Postgres,
+            "DELETE FROM accounts WHERE id = $1",
+            [self.id.into()],
+        );
+        db.execute(stmt).await?;
 
         Ok(())
     }

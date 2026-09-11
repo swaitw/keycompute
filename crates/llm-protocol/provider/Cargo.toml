@@ -1,0 +1,19 @@
+[package]
+name = "llm-protocol-provider"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+test-support = []
+
+[dependencies]
+keycompute-types = { workspace = true }
+async-trait = "0.1"
+bytes = "1"
+futures = "0.3"
+reqwest = { version = "0.12", features = ["json", "stream"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+chrono = { version = "0.4", features = ["serde"] }
+thiserror = "2"
+tokio = { version = "1", features = ["sync", "macros", "rt"] }

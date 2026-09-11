@@ -4,8 +4,8 @@ use client_api::error::Result;
 use client_api::{
     AdminApi,
     api::admin::{
-        AccountInfo, AccountQueryParams, AccountTestResponse, CreateAccountRequest,
-        MessageResponse, UpdateAccountRequest,
+        AccountInfo, AccountPage, AccountQueryParams, AccountRefreshResponse, AccountTestResponse,
+        CreateAccountRequest, MessageResponse, UpdateAccountRequest,
     },
 };
 
@@ -15,6 +15,13 @@ pub async fn list(params: Option<AccountQueryParams>, token: &str) -> Result<Vec
     let client = get_client();
     AdminApi::new(&client)
         .list_accounts(params.as_ref(), token)
+        .await
+}
+
+pub async fn list_page(params: AccountQueryParams, token: &str) -> Result<AccountPage> {
+    let client = get_client();
+    AdminApi::new(&client)
+        .list_accounts_page(Some(&params), token)
         .await
 }
 
@@ -38,7 +45,7 @@ pub async fn test(id: &str, token: &str) -> Result<AccountTestResponse> {
     AdminApi::new(&client).test_account(id, token).await
 }
 
-pub async fn refresh(id: &str, token: &str) -> Result<AccountInfo> {
+pub async fn refresh(id: &str, token: &str) -> Result<AccountRefreshResponse> {
     let client = get_client();
     AdminApi::new(&client).refresh_account(id, token).await
 }

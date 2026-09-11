@@ -91,8 +91,6 @@ pub struct PublicSettings {
     pub site_description: Option<String>,
     pub site_logo_url: Option<String>,
     pub site_favicon_url: Option<String>,
-    /// API 基础 URL（用于生成 API 用法示例）
-    pub api_base_url: Option<String>,
     pub maintenance_mode: bool,
     pub maintenance_message: Option<String>,
     pub distribution_enabled: bool,
@@ -110,13 +108,12 @@ impl Default for PublicSettings {
     fn default() -> Self {
         Self {
             site_name: "KeyCompute".to_string(),
-            site_description: Some("AI Gateway Platform".to_string()),
+            site_description: Some("AI token compute service platform".to_string()),
             site_logo_url: None,
             site_favicon_url: None,
-            api_base_url: None,
             maintenance_mode: false,
             maintenance_message: None,
-            distribution_enabled: true,
+            distribution_enabled: false,
             alipay_enabled: false,
             wechatpay_enabled: false,
             system_notice: None,

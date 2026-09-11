@@ -1,15 +1,28 @@
 //! KeyCompute 数据库访问层
 //!
-//! 提供 PostgreSQL 数据库连接池、ORM 模型和迁移支持
+//! 提供 PostgreSQL 数据库连接池、ORM 模型和新库结构初始化
 
+pub mod db_router;
+pub mod lifecycle;
+pub mod migrations;
 pub mod models;
 pub mod schema;
 
-use sqlx::{PgPool, Postgres, migrate::Migrator, postgres::PgPoolOptions};
+use sea_orm::{
+    ConnectOptions, ConnectionTrait, Database as SeaDatabase, DatabaseConnection,
+    DatabaseTransaction, DbBackend, Statement, TransactionTrait,
+};
+use std::sync::Arc;
 use std::time::Duration;
 
+pub use db_router::DbRouter;
+pub use lifecycle::*;
 pub use models::*;
 pub use schema::*;
+
+/// 全新部署使用的统一 `001_init.sql` 数据库结构。
+#[cfg(test)]
+const DATABASE_SCHEMA: &str = include_str!("../migrations/001_init.sql");
 
 // ============================================================================
 // 错误类型定义
@@ -22,9 +35,9 @@ pub enum DbError {
     #[error("database connection failed: {0}")]
     ConnectionError(String),
 
-    /// 迁移错误
-    #[error("migration failed: {0}")]
-    MigrationError(String),
+    /// 新库结构初始化错误
+    #[error("database schema initialization failed: {0}")]
+    SchemaInitializationError(String),
 
     /// 实体未找到
     #[error("{entity} not found: {id}")]
@@ -46,9 +59,13 @@ pub enum DbError {
     #[error("invalid order status: expected {expected}, actual {actual}")]
     InvalidOrderStatus { expected: String, actual: String },
 
+    /// 租户级持久化资源配额已用尽
+    #[error("{resource} limit exceeded: {limit}")]
+    ResourceLimitExceeded { resource: String, limit: String },
+
     /// 数据库原生错误
     #[error("database error: {0}")]
-    DatabaseError(#[from] sqlx::Error),
+    DatabaseError(#[from] sea_orm::DbErr),
 
     /// 其他错误
     #[error("{0}")]
@@ -98,22 +115,28 @@ impl DbError {
     /// 检查是否为唯一约束冲突
     pub fn is_duplicate(&self) -> bool {
         matches!(self, Self::DuplicateKey { .. })
-            || matches!(self, Self::DatabaseError(sqlx::Error::Database(e)) if e.constraint().is_some())
+            || matches!(self, Self::DatabaseError(sea_orm::DbErr::Query(e))
+                if e.to_string().contains("duplicate key") || e.to_string().contains("unique constraint"))
     }
 
-    /// 从 sqlx::Error 转换，保留语义
-    pub fn from_sqlx(err: sqlx::Error, entity: &str, id: &str) -> Self {
-        match err {
-            sqlx::Error::RowNotFound => Self::NotFound {
+    /// 从 sea_orm::DbErr 转换，保留语义
+    pub fn from_db_err(err: sea_orm::DbErr, entity: &str, id: &str) -> Self {
+        match &err {
+            sea_orm::DbErr::RecordNotFound(_) => Self::NotFound {
                 entity: entity.to_string(),
                 id: id.to_string(),
             },
-            sqlx::Error::Database(ref e) if e.constraint().is_some() => Self::DuplicateKey {
-                entity: e.table().unwrap_or(entity).to_string(),
-                field: e.constraint().unwrap_or("unknown").to_string(),
-                value: id.to_string(),
-            },
-            other => Self::DatabaseError(other),
+            sea_orm::DbErr::Query(e)
+                if e.to_string().contains("duplicate key")
+                    || e.to_string().contains("unique constraint") =>
+            {
+                Self::DuplicateKey {
+                    entity: entity.to_string(),
+                    field: "constraint".to_string(),
+                    value: id.to_string(),
+                }
+            }
+            _ => Self::DatabaseError(err),
         }
     }
 }
@@ -153,11 +176,23 @@ impl Default for DatabaseConfig {
     }
 }
 
+impl From<&DatabaseConfig> for db_router::DatabaseConfig {
+    fn from(c: &DatabaseConfig) -> Self {
+        Self {
+            max_connections: c.max_connections,
+            min_connections: c.min_connections,
+            connect_timeout_secs: c.connect_timeout,
+            idle_timeout_secs: c.idle_timeout,
+            max_lifetime_secs: c.max_lifetime,
+        }
+    }
+}
+
 // ============================================================================
 // 连接池管理
 // ============================================================================
 
-/// 初始化数据库连接池
+/// 初始化数据库连接
 ///
 /// # Examples
 ///
@@ -167,133 +202,199 @@ impl Default for DatabaseConfig {
 /// #[tokio::main]
 /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ///     let config = DatabaseConfig::default();
-///     let pool = init_pool(&config).await?;
+///     let db = init_pool(&config).await?;
 ///     Ok(())
 /// }
 /// ```
-pub async fn init_pool(config: &DatabaseConfig) -> Result<PgPool, DbError> {
-    let pool = PgPoolOptions::new()
-        .max_connections(config.max_connections)
+pub async fn init_pool(config: &DatabaseConfig) -> Result<DatabaseConnection, DbError> {
+    let mut opt = ConnectOptions::new(&config.url);
+    opt.max_connections(config.max_connections)
         .min_connections(config.min_connections)
         .acquire_timeout(Duration::from_secs(config.connect_timeout))
         .idle_timeout(Duration::from_secs(config.idle_timeout))
-        .max_lifetime(Duration::from_secs(config.max_lifetime))
-        .connect(&config.url)
+        .max_lifetime(Duration::from_secs(config.max_lifetime));
+
+    let db = SeaDatabase::connect(opt)
         .await
         .map_err(|e| DbError::ConnectionError(e.to_string()))?;
 
     tracing::info!("Database pool initialized successfully");
 
-    Ok(pool)
+    Ok(db)
 }
 
-/// 运行数据库迁移
-///
-/// 使用 sqlx 的嵌入式迁移
-pub async fn run_migrations(pool: &PgPool) -> Result<(), DbError> {
-    // 嵌入式迁移文件
-    static MIGRATOR: Migrator = sqlx::migrate!("src/migrations");
-
-    MIGRATOR
-        .run(pool)
-        .await
-        .map_err(|e| DbError::MigrationError(e.to_string()))?;
-
-    tracing::info!("Database migrations completed successfully");
-
+/// Apply the versioned schema migrations. Kept under the previous public name
+/// so deployments and integration tests do not need a flag-day API change.
+pub async fn initialize_schema(db: &DatabaseConnection) -> Result<(), DbError> {
+    migrations::run_migrations(db).await?;
+    verify_schema_sentinels(db).await?;
+    tracing::info!("Database schema initialized successfully");
     Ok(())
+}
+
+/// 统一基线中的关键哨兵列，用于验证初始化后的数据库结构完整性。
+const SCHEMA_SENTINEL_COLUMNS: &[(&str, &str)] = &[
+    ("payment_orders", "payment_scene"),
+    ("payment_orders", "provider_trade_no"),
+    ("payment_notifications", "payload_digest"),
+    ("payment_provider_states", "circuit_state"),
+    ("accounts", "last_probe_status"),
+    ("accounts", "api_capabilities"),
+    ("responses_idempotency_claims", "billing_request_id"),
+    ("responses_idempotency_claims", "account_id"),
+    ("gateway_requests", "trace_quality"),
+    ("gateway_request_attempts", "attempt_no"),
+];
+
+/// 验证当前数据库包含最新 schema 的哨兵列，缺失时拒绝启动。
+pub async fn verify_schema_sentinels(db: &impl ConnectionTrait) -> Result<(), DbError> {
+    verify_required_columns(db, SCHEMA_SENTINEL_COLUMNS).await
+}
+
+/// 验证指定的 (表, 列) 对在当前 schema 中存在。
+pub async fn verify_required_columns(
+    db: &impl ConnectionTrait,
+    required: &[(&str, &str)],
+) -> Result<(), DbError> {
+    let mut missing = Vec::new();
+    for (table, column) in required {
+        let stmt = Statement::from_sql_and_values(
+            DbBackend::Postgres,
+            "SELECT 1 AS present FROM information_schema.columns \
+             WHERE table_schema = current_schema() AND table_name = $1 AND column_name = $2",
+            [(*table).into(), (*column).into()],
+        );
+        let found = db
+            .query_one(stmt)
+            .await
+            .map_err(|error| DbError::SchemaInitializationError(error.to_string()))?;
+        if found.is_none() {
+            missing.push(format!("{table}.{column}"));
+        }
+    }
+    if missing.is_empty() {
+        Ok(())
+    } else {
+        Err(DbError::SchemaInitializationError(format!(
+            "database is missing required columns [{}]",
+            missing.join(", ")
+        )))
+    }
+}
+
+/// 清理超过保留期的支付安全事件，返回删除的行数。
+///
+/// 回调端点暴露于公网，`payment_security_events` 按拒绝事件持续追加；
+/// 定期清理避免表无界增长。
+pub async fn purge_expired_payment_security_events(
+    db: &impl ConnectionTrait,
+    retention_days: i64,
+) -> Result<u64, DbError> {
+    let statement = Statement::from_sql_and_values(
+        DbBackend::Postgres,
+        "DELETE FROM payment_security_events WHERE created_at < NOW() - make_interval(days => $1::int)",
+        [retention_days.into()],
+    );
+    let result = db.execute(statement).await?;
+    Ok(result.rows_affected())
 }
 
 // ============================================================================
 // 数据库管理器
 // ============================================================================
 
-use sqlx::{PgConnection, Transaction};
-
 /// 数据库管理器
 ///
-/// 封装数据库连接池，提供统一的数据库访问入口
+/// 封装数据库路由器，提供统一的数据库访问入口
 #[derive(Clone)]
 pub struct Database {
-    pool: PgPool,
+    router: Arc<DbRouter>,
 }
 
 impl Database {
     /// 创建新的数据库实例
-    pub async fn new(config: &DatabaseConfig) -> Result<Self, DbError> {
-        let pool = init_pool(config).await?;
-        Ok(Self { pool })
+    ///
+    /// # 参数
+    /// * `write_config` — 写库连接池配置
+    /// * `read_urls` — 读库连接 URL 列表（空列表 = 无读写分离）
+    /// * `read_config` — 读库连接池配置
+    /// * `routing_config` — 读写分离路由配置
+    pub async fn new(
+        write_config: &DatabaseConfig,
+        read_urls: &[String],
+        read_config: &keycompute_config::DatabaseReadConfig,
+        routing_config: &keycompute_config::DatabaseRoutingConfig,
+    ) -> Result<Self, DbError> {
+        use db_router::{
+            DatabaseConfig as RouterDbConfig, DatabaseReadConfig as RouterReadConfig,
+            DatabaseRoutingConfig as RouterRoutingConfig,
+        };
+        let router = DbRouter::new(
+            &write_config.url,
+            read_urls,
+            &RouterDbConfig::from(write_config),
+            &RouterReadConfig::from(read_config),
+            &RouterRoutingConfig::from(routing_config),
+        )
+        .await
+        .map_err(|e| DbError::ConnectionError(e.to_string()))?;
+        Ok(Self { router })
     }
 
-    /// 从现有连接池创建
-    pub fn from_pool(pool: PgPool) -> Self {
-        Self { pool }
+    /// 从 DbRouter 创建
+    pub fn from_router(router: Arc<DbRouter>) -> Self {
+        Self { router }
     }
 
-    /// 从环境变量创建
-    pub async fn from_env() -> Result<Self, DbError> {
-        let config = DatabaseConfig::default();
-        Self::new(&config).await
+    /// 从现有连接创建（包装为单库模式）
+    pub fn from_connection(db: DatabaseConnection) -> Self {
+        Self {
+            router: DbRouter::single(db),
+        }
     }
 
-    /// 获取连接池引用
-    pub fn pool(&self) -> &PgPool {
-        &self.pool
+    /// 获取连接引用（返回写库连接）
+    pub fn connection(&self) -> &DatabaseConnection {
+        self.router.write_conn()
     }
 
-    /// 获取连接池（消费）
-    pub fn into_pool(self) -> PgPool {
-        self.pool
+    /// 获取路由引用
+    pub fn router(&self) -> Arc<DbRouter> {
+        Arc::clone(&self.router)
     }
 
     /// 开始一个事务
-    pub async fn begin(&self) -> Result<Transaction<'_, Postgres>, sqlx::Error> {
-        self.pool.begin().await
+    pub async fn begin(&self) -> Result<DatabaseTransaction, sea_orm::DbErr> {
+        self.router.write_conn().begin().await
     }
 
-    /// 获取一个连接
-    pub async fn acquire(&self) -> Result<PgConnection, sqlx::Error> {
-        self.pool.acquire().await.map(|c| c.detach())
-    }
-
-    /// 运行迁移
-    pub async fn migrate(&self) -> Result<(), DbError> {
-        run_migrations(&self.pool).await
+    /// Apply all pending versioned migrations.
+    pub async fn initialize_schema(&self) -> Result<(), DbError> {
+        initialize_schema(self.router.write_conn()).await
     }
 
     /// 测试连接
     pub async fn test_connection(&self) -> Result<(), DbError> {
-        sqlx::query("SELECT 1").fetch_one(&self.pool).await?;
+        let stmt = Statement::from_string(DbBackend::Postgres, "SELECT 1".to_string());
+        self.router.write_conn().execute(stmt).await?;
         Ok(())
     }
 
-    /// 获取连接池状态信息
-    pub fn pool_status(&self) -> PoolStatus {
-        PoolStatus {
-            size: self.pool.size(),
-            idle: self.pool.num_idle() as u32,
-            is_closed: self.pool.is_closed(),
-        }
+    /// 获取写库连接（消费自身）
+    #[deprecated(since = "0.3.0", note = "Use `router()` or `connection()` instead")]
+    pub fn into_connection(self) -> DatabaseConnection {
+        self.router.write_conn().clone()
     }
-}
 
-/// 连接池状态
-#[derive(Debug, Clone)]
-pub struct PoolStatus {
-    /// 连接池大小
-    pub size: u32,
-    /// 空闲连接数
-    pub idle: u32,
-    /// 是否已关闭
-    pub is_closed: bool,
+    /// 获取路由器（消费自身）
+    pub fn into_router(self) -> Arc<DbRouter> {
+        self.router
+    }
 }
 
 /// 数据库连接管理器（已弃用，使用 Database）
 #[deprecated(since = "0.2.0", note = "Use `Database` instead")]
 pub type DatabaseManager = Database;
-
-/// 重新导出 sqlx 类型
-pub use sqlx::{PgConnection as SqlxPgConnection, PgPool as SqlxPgPool, Row};
 
 #[cfg(test)]
 mod tests {
@@ -321,8 +422,61 @@ mod tests {
     }
 
     #[test]
-    fn test_db_error_from_sqlx() {
-        let err = DbError::from_sqlx(sqlx::Error::RowNotFound, "User", "123");
+    fn test_db_error_from_db_err() {
+        let err = DbError::from_db_err(
+            sea_orm::DbErr::RecordNotFound("not found".to_string()),
+            "User",
+            "123",
+        );
         assert!(err.is_not_found());
+    }
+
+    #[test]
+    fn database_schema_contains_no_incremental_upgrade_steps() {
+        assert!(DATABASE_SCHEMA.contains("token_version INTEGER NOT NULL DEFAULT 0"));
+        assert!(DATABASE_SCHEMA.contains("CONSTRAINT uk_distribution_records_unique"));
+        assert!(DATABASE_SCHEMA.contains("CONSTRAINT uk_node_tips_usage_log_id UNIQUE"));
+        assert!(DATABASE_SCHEMA.contains(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uk_balance_transactions_consume_usage_log"
+        ));
+        assert!(DATABASE_SCHEMA.contains("CREATE TABLE IF NOT EXISTS admin_balance_operations"));
+        assert!(DATABASE_SCHEMA.contains("idempotency_key_hash VARCHAR(64) NOT NULL UNIQUE"));
+        assert!(
+            DATABASE_SCHEMA.contains(
+                "CHECK (operation_type IN ('recharge', 'consume', 'freeze', 'unfreeze'))"
+            )
+        );
+        assert!(DATABASE_SCHEMA.contains("CREATE TABLE IF NOT EXISTS balance_reservations"));
+        assert!(DATABASE_SCHEMA.contains("request_id UUID NOT NULL UNIQUE"));
+        assert!(DATABASE_SCHEMA.contains("owner_token UUID NOT NULL DEFAULT gen_random_uuid()"));
+        assert!(DATABASE_SCHEMA.contains("uk_balance_reservations_usage_log"));
+        assert!(DATABASE_SCHEMA.contains("CREATE TABLE IF NOT EXISTS gateway_requests"));
+        assert!(DATABASE_SCHEMA.contains("idempotency_id UUID UNIQUE"));
+        assert!(
+            DATABASE_SCHEMA.contains("CONSTRAINT ck_tenants_responses_idempotency_claim_count")
+        );
+        assert!(
+            DATABASE_SCHEMA.contains("CREATE TABLE IF NOT EXISTS responses_idempotency_claims")
+        );
+        assert!(DATABASE_SCHEMA.contains("PRIMARY KEY (tenant_id, binding_id)"));
+        assert!(
+            DATABASE_SCHEMA.contains("CONSTRAINT uk_responses_idempotency_claims_billing UNIQUE")
+        );
+        assert!(DATABASE_SCHEMA.contains("CREATE TABLE IF NOT EXISTS gateway_request_attempts"));
+        assert!(DATABASE_SCHEMA.contains("last_probe_status VARCHAR(32)"));
+        assert!(DATABASE_SCHEMA.contains("api_capabilities TEXT[] NOT NULL"));
+        assert!(DATABASE_SCHEMA.contains("CONSTRAINT ck_accounts_api_capabilities"));
+        assert!(
+            DATABASE_SCHEMA.contains("account_id UUID REFERENCES accounts(id) ON DELETE RESTRICT")
+        );
+        assert!(
+            !DATABASE_SCHEMA
+                .contains("account_id UUID NOT NULL REFERENCES accounts(id) ON DELETE CASCADE")
+        );
+        assert!(DATABASE_SCHEMA.contains("CONSTRAINT ck_response_affinities_account_owner"));
+        assert!(DATABASE_SCHEMA.contains("CONSTRAINT ck_accounts_probe_status"));
+        assert!(!DATABASE_SCHEMA.contains("ALTER TABLE"));
+        assert!(!DATABASE_SCHEMA.contains("\nUPDATE "));
+        assert!(!DATABASE_SCHEMA.contains("\nDELETE FROM "));
     }
 }
